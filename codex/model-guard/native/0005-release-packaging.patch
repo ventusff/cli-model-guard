@@ -1359,7 +1359,7 @@ index ee42ceb..863295b 100644
  #[clap(
      author,
 -    version,
-+    version = concat!(env!("CARGO_PKG_VERSION"), "+model-guard.1.9.0"),
++    version = concat!(env!("CARGO_PKG_VERSION"), "+model-guard.1.10.0"),
      // If a sub‑command is given, ignore requirements of the default args.
      subcommand_negates_reqs = true,
      // The executable is sometimes invoked via a platform‑specific name like

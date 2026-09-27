@@ -1,11 +1,14 @@
 diff --git a/codex-rs/tui/src/chatwidget/model_guard_tests.rs b/codex-rs/tui/src/chatwidget/model_guard_tests.rs
 new file mode 100644
-index 0000000..fb52284
+index 0000000..167f49e
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/model_guard_tests.rs
-@@ -0,0 +1,429 @@
+@@ -0,0 +1,880 @@
 +use super::*;
++use crate::chatwidget::tests::Op;
 +use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
++use crate::model_catalog::ModelCatalog;
++use codex_app_server_protocol::GetAccountRateLimitsResponse;
 +use codex_app_server_protocol::RawResponseCompletedNotification;
 +use codex_app_server_protocol::Turn;
 +use codex_app_server_protocol::TurnStartedNotification;
@@ -17,7 +20,7 @@ index 0000000..fb52284
 +    chat.set_model("gpt-6-astra");
 +    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Max));
 +    chat.thread_id = Some(ThreadId::new());
-+    chat.model_guard = Some(ModelGuard::default());
++    chat.model_guard = Some(guard());
 +    let start = ServerNotification::TurnStarted(TurnStartedNotification {
 +        thread_id: chat.thread_id.unwrap().to_string(),
 +        turn: Turn {
@@ -34,6 +37,13 @@ index 0000000..fb52284
 +    chat.observe_model_guard(&start, /*replay_kind*/ None);
 +    chat.observe_model_guard(&route(&chat, None), None);
 +    chat
++}
++
++fn guard() -> ModelGuard {
++    ModelGuard {
++        selected: Some("gpt-6-astra".into()),
++        ..ModelGuard::default()
++    }
 +}
 +
 +fn route(chat: &ChatWidget, actual: Option<&str>) -> ServerNotification {
@@ -174,11 +184,11 @@ index 0000000..fb52284
 +    );
 +    insta::assert_snapshot!(lines(&chat), @r"
 +     request gpt-6-astra · max
-+     Response labeled gpt-4o · requested gpt-6-astra (body label, not a header)
++     STOPPED · labeled gpt-4o · requested gpt-6-astra · /model to continue
 +    ");
 +    chat.observe_model_guard(&route(&chat, Some("gpt-4o")), /*replay_kind*/ None);
 +    let text = lines(&chat);
-+    assert!(text.contains("ROUTE DIFF gpt-6-astra → gpt-4o"));
++    assert!(text.contains("STOPPED · ROUTE DIFF gpt-6-astra → gpt-4o"));
 +    assert!(!text.contains("Response labeled"));
 +}
 +
@@ -249,7 +259,11 @@ index 0000000..fb52284
 +        let stock_height = chat.desired_height(width);
 +        let stock_cursor =
 +            chat.cursor_pos(Rect::new(/*x*/ 0, /*y*/ 0, width, stock_height));
-+        assert_eq!((height, cursor), (stock_height + 1, stock_cursor));
++        let warning_rows = if width == 40 { 2 } else { 1 };
++        assert_eq!(
++            (height, cursor),
++            (stock_height + warning_rows, stock_cursor)
++        );
 +        chat.model_guard = guard;
 +        insta::assert_snapshot!(
 +            format!("native_guard_width_{width}"),
@@ -332,7 +346,7 @@ index 0000000..fb52284
 +#[tokio::test]
 +async fn native_guard_resume_restores_active_lifecycle_without_replaying_evidence() {
 +    let mut chat = widget().await;
-+    chat.model_guard = Some(ModelGuard::default());
++    chat.model_guard = Some(guard());
 +    let ServerNotification::TurnStarted(start) = started(&chat, "turn-1") else {
 +        unreachable!()
 +    };
@@ -390,6 +404,9 @@ index 0000000..fb52284
 +                n.requested_model =
 +                    "requested-model-with-a-long-revision-and-deployment-name".into();
 +            }
++            chat.model_guard_user_selected(
++                "requested-model-with-a-long-revision-and-deployment-name",
++            );
 +            chat.observe_model_guard(&notification, None);
 +        }
 +        let width = 40;
@@ -418,7 +435,7 @@ index 0000000..fb52284
 +#[tokio::test]
 +async fn native_guard_attached_request_without_metadata_never_infers_its_effort() {
 +    let mut chat = widget().await;
-+    chat.model_guard = Some(ModelGuard::default());
++    chat.model_guard = Some(guard());
 +    let ServerNotification::TurnStarted(start) = started(&chat, "turn-1") else {
 +        unreachable!()
 +    };
@@ -433,57 +450,489 @@ index 0000000..fb52284
 +    assert!(lines(&chat).contains("request gpt-6-astra · max"));
 +    assert_eq!(chat.model_guard.as_ref().unwrap().samples.len(), 0);
 +}
++
++fn interrupts(ops: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> usize {
++    std::iter::from_fn(|| ops.try_recv().ok())
++        .filter(|op| matches!(op, Op::Interrupt))
++        .count()
++}
++
++async fn running_widget() -> (ChatWidget, tokio::sync::mpsc::UnboundedReceiver<Op>) {
++    let (mut chat, _sender, _events, ops) = make_chatwidget_manual_with_sender().await;
++    chat.set_model("gpt-6-astra");
++    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Max));
++    chat.thread_id = Some(ThreadId::new());
++    chat.model_guard = Some(guard());
++    chat.observe_model_guard(&started(&chat, "turn-1"), /*replay_kind*/ None);
++    chat.bottom_pane.set_task_running(/*running*/ true);
++    (chat, ops)
++}
++
++#[tokio::test]
++async fn native_guard_request_for_another_model_stops_the_turn_until_the_user_selects() {
++    let (mut chat, mut ops) = running_widget().await;
++    let mut reserve = route(&chat, /*actual*/ None);
++    if let ServerNotification::ModelRoutingUpdated(n) = &mut reserve {
++        n.requested_model = "gpt-reserve".into();
++        n.response_label = Some("gpt-reserve".into());
++    }
++    chat.observe_model_guard(&reserve, /*replay_kind*/ None);
++    let guard = chat.model_guard.as_ref().unwrap();
++    assert_eq!(
++        guard.halt,
++        Some(Halt::Request {
++            selected: "gpt-6-astra".into(),
++            requested: "gpt-reserve".into(),
++        })
++    );
++    assert_eq!(interrupts(&mut ops), 1);
++    insta::assert_snapshot!(lines(&chat), @r"
++     request gpt-reserve · max
++     STOPPED · request gpt-reserve · selected gpt-6-astra · /model to continue
++    ");
++    assert!(chat.model_guard_hold_message().is_some());
++    assert!(chat.model_guard_block_message(&Op::Compact).is_some());
++    assert!(chat.model_guard_block_message(&Op::interrupt()).is_none());
++    // A second observation of the same request does not interrupt again.
++    chat.observe_model_guard(&reserve, /*replay_kind*/ None);
++    assert_eq!(interrupts(&mut ops), 0);
++    // Selecting a model, even the same one, is the only way out.
++    chat.model_guard_user_selected("gpt-6-astra");
++    let guard = chat.model_guard.as_ref().unwrap();
++    assert_eq!(
++        (guard.halt.as_ref(), guard.selected.as_deref()),
++        (None, Some("gpt-6-astra"))
++    );
++    assert!(chat.model_guard_hold_message().is_none());
++}
++
++#[tokio::test]
++async fn native_guard_stop_is_ordered_by_evidence_and_interrupts_once() {
++    let (mut chat, mut ops) = running_widget().await;
++    let mut labeled = route(&chat, /*actual*/ None);
++    if let ServerNotification::ModelRoutingUpdated(n) = &mut labeled {
++        n.response_label = Some("gpt-5.6-luna".into());
++    }
++    chat.observe_model_guard(&labeled, /*replay_kind*/ None);
++    assert_eq!(
++        chat.model_guard.as_ref().unwrap().halt,
++        Some(Halt::Label {
++            requested: "gpt-6-astra".into(),
++            label: "gpt-5.6-luna".into(),
++        })
++    );
++    assert_eq!(interrupts(&mut ops), 1);
++    chat.observe_model_guard(&route(&chat, Some("gpt-4o")), /*replay_kind*/ None);
++    assert_eq!(
++        chat.model_guard.as_ref().unwrap().halt,
++        Some(Halt::Route {
++            requested: "gpt-6-astra".into(),
++            actual: "gpt-4o".into(),
++        })
++    );
++    assert_eq!(interrupts(&mut ops), 0);
++    // Weaker evidence never replaces the disclosed route.
++    chat.observe_model_guard(&labeled, /*replay_kind*/ None);
++    assert!(matches!(
++        chat.model_guard.as_ref().unwrap().halt,
++        Some(Halt::Route { .. })
++    ));
++    let mut rerouted = route(&chat, /*actual*/ None);
++    if let ServerNotification::ModelRoutingUpdated(n) = &mut rerouted {
++        n.requested_model = "gpt-reserve".into();
++    }
++    chat.observe_model_guard(&rerouted, /*replay_kind*/ None);
++    assert!(matches!(
++        chat.model_guard.as_ref().unwrap().halt,
++        Some(Halt::Request { .. })
++    ));
++    assert_eq!(interrupts(&mut ops), 0);
++}
++
++#[tokio::test]
++async fn native_guard_configured_thread_on_another_model_stops_before_the_first_turn() {
++    let (mut chat, _sender, _events, mut ops) = make_chatwidget_manual_with_sender().await;
++    chat.thread_id = Some(ThreadId::new());
++    chat.model_guard = Some(guard());
++    chat.set_model("gpt-reserve");
++    chat.model_guard_session_configured();
++    assert_eq!(
++        chat.model_guard.as_ref().unwrap().halt,
++        Some(Halt::Request {
++            selected: "gpt-6-astra".into(),
++            requested: "gpt-reserve".into(),
++        })
++    );
++    assert_eq!(interrupts(&mut ops), 0);
++    assert!(lines(&chat).contains("STOPPED · request gpt-reserve · selected gpt-6-astra"));
++    assert!(chat.model_guard_hold_message().is_some());
++    // Without a configured model the guard adopts the thread's model.
++    chat.thread_id = Some(ThreadId::new());
++    chat.model_guard = Some(ModelGuard::default());
++    chat.model_guard_session_configured();
++    let guard = chat.model_guard.as_ref().unwrap();
++    assert_eq!(
++        (guard.selected.as_deref(), guard.halt.as_ref()),
++        (Some("gpt-reserve"), None)
++    );
++}
++
++#[tokio::test]
++async fn native_guard_reserve_model_is_always_flagged_even_when_selected() {
++    let (mut chat, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
++    chat.thread_id = Some(ThreadId::new());
++    chat.model_guard = Some(ModelGuard::default());
++    chat.set_model("gpt-reserve");
++    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
++    chat.model_guard_session_configured();
++    insta::assert_snapshot!(lines(&chat), @r"
++     selected gpt-reserve · high
++     RESERVE MODEL gpt-reserve · Codex's fallback for exhausted usage · /model to leave it
++    ");
++    chat.model_guard_user_selected("gpt-6-astra");
++    chat.set_model("gpt-6-astra");
++    assert_eq!(chat.model_guard_lines().unwrap().len(), 1);
++}
++
++#[tokio::test]
++async fn native_guard_accepts_the_configured_review_model_only_during_a_review() {
++    for review_turn in [true, false] {
++        let (mut chat, mut ops) = running_widget().await;
++        chat.model_guard.as_mut().unwrap().review = Some("gpt-6-luna".into());
++        chat.review.is_review_mode = review_turn;
++        let mut review = route(&chat, /*actual*/ None);
++        if let ServerNotification::ModelRoutingUpdated(n) = &mut review {
++            n.requested_model = "gpt-6-luna".into();
++        }
++        chat.observe_model_guard(&review, /*replay_kind*/ None);
++        assert_eq!(
++            chat.model_guard.as_ref().unwrap().halt.is_none(),
++            review_turn,
++            "review_turn={review_turn}"
++        );
++        assert_eq!(interrupts(&mut ops), usize::from(!review_turn));
++    }
++}
++
++#[tokio::test]
++async fn native_guard_stop_survives_widget_replacement_for_the_same_thread() {
++    let (mut chat, mut ops) = running_widget().await;
++    let thread = chat.thread_id.unwrap();
++    chat.observe_model_guard(&route(&chat, Some("gpt-4o")), /*replay_kind*/ None);
++    assert_eq!(interrupts(&mut ops), 1);
++    // The next widget only inherits the selection; the thread brings back its stop.
++    let (mut next, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
++    next.set_model("gpt-6-astra");
++    next.model_guard = Some(ModelGuard::default());
++    next.inherit_model_guard(&chat);
++    assert_eq!(
++        next.model_guard.as_ref().unwrap().selected.as_deref(),
++        Some("gpt-6-astra")
++    );
++    assert_eq!(next.model_guard.as_ref().unwrap().halt, None);
++    next.thread_id = Some(thread);
++    next.model_guard_session_configured();
++    assert_eq!(
++        next.model_guard.as_ref().unwrap().halt,
++        Some(Halt::Route {
++            requested: "gpt-6-astra".into(),
++            actual: "gpt-4o".into(),
++        })
++    );
++    assert!(lines(&next).contains("STOPPED · ROUTE DIFF gpt-6-astra → gpt-4o"));
++    assert!(next.model_guard_hold_message().is_some());
++    assert!(
++        std::iter::from_fn(|| events.try_recv().ok())
++            .any(|event| matches!(event, AppEvent::InsertHistoryCell(_)))
++    );
++    // A different thread shown by the same process starts clean.
++    let (mut other, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
++    other.set_model("gpt-6-astra");
++    other.model_guard = Some(guard());
++    other.thread_id = Some(ThreadId::new());
++    other.model_guard_session_configured();
++    assert_eq!(other.model_guard.as_ref().unwrap().halt, None);
++}
++
++#[tokio::test]
++async fn native_guard_judges_a_thread_no_widget_shows_and_remembers_the_stop() {
++    let (mut chat, _ops) = running_widget().await;
++    let thread = chat.thread_id.unwrap();
++    // The widget's selection is what the background check uses.
++    chat.model_guard_user_selected("gpt-6-astra");
++    let mut reserve = route(&chat, /*actual*/ None);
++    if let ServerNotification::ModelRoutingUpdated(n) = &mut reserve {
++        n.requested_model = "gpt-reserve".into();
++    }
++    assert_eq!(
++        observe_background(thread, &reserve),
++        Some((
++            Halt::Request {
++                selected: "gpt-6-astra".into(),
++                requested: "gpt-reserve".into(),
++            },
++            "turn-1".into()
++        ))
++    );
++    // The same or weaker evidence is not a second interruption.
++    assert_eq!(observe_background(thread, &reserve), None);
++    assert_eq!(
++        observe_background(thread, &route(&chat, Some("gpt-4o"))),
++        None
++    );
++    assert_eq!(
++        thread_guard(thread).unwrap().halt,
++        Some(Halt::Request {
++            selected: "gpt-6-astra".into(),
++            requested: "gpt-reserve".into(),
++        })
++    );
++    // A thread this process never selected a model for is still held to the disclosure.
++    let unknown = ThreadId::new();
++    assert_eq!(observe_background(unknown, &reserve), None);
++    let stop = observe_background(unknown, &route(&chat, Some("gpt-4o")));
++    assert!(matches!(stop, Some((Halt::Route { .. }, _))));
++    assert_eq!(
++        observe_background(unknown, &completion(&chat, "x", 516)),
++        None
++    );
++}
++
++#[tokio::test]
++async fn native_guard_interrupts_any_turn_started_on_a_stopped_thread() {
++    let (mut chat, mut ops) = running_widget().await;
++    chat.observe_model_guard(&route(&chat, Some("gpt-4o")), /*replay_kind*/ None);
++    assert_eq!(interrupts(&mut ops), 1);
++    chat.observe_model_guard(&started(&chat, "turn-2"), /*replay_kind*/ None);
++    assert_eq!(interrupts(&mut ops), 1);
++    // A restored in-progress turn on a stopped thread ends as well.
++    let ServerNotification::TurnStarted(start) = started(&chat, "turn-3") else {
++        unreachable!()
++    };
++    chat.restore_model_guard_turn(&start.turn);
++    assert_eq!(interrupts(&mut ops), 1);
++    // A completed turn does not.
++    let ServerNotification::TurnStarted(mut done) = started(&chat, "turn-4") else {
++        unreachable!()
++    };
++    done.turn.status = TurnStatus::Completed;
++    chat.restore_model_guard_turn(&done.turn);
++    assert_eq!(interrupts(&mut ops), 0);
++}
++
++#[tokio::test]
++async fn native_guard_account_change_still_stops_the_turn() {
++    let (mut chat, mut ops) = running_widget().await;
++    chat.model_guard.as_mut().unwrap().account_changed();
++    chat.observe_model_guard(&route(&chat, Some("gpt-4o")), /*replay_kind*/ None);
++    let guard = chat.model_guard.as_ref().unwrap();
++    assert_eq!(
++        guard.halt,
++        Some(Halt::Route {
++            requested: "gpt-6-astra".into(),
++            actual: "gpt-4o".into(),
++        })
++    );
++    // The request itself is not attributed to the new login.
++    assert_eq!(
++        (guard.route.as_ref(), guard.mismatch.as_ref()),
++        (None, None)
++    );
++    assert_eq!(interrupts(&mut ops), 1);
++}
++
++#[tokio::test]
++async fn native_guard_settings_pushed_by_the_server_are_judged() {
++    let (mut chat, mut ops) = running_widget().await;
++    chat.set_model("gpt-reserve");
++    chat.model_guard_settings_applied();
++    assert_eq!(
++        chat.model_guard.as_ref().unwrap().halt,
++        Some(Halt::Request {
++            selected: "gpt-6-astra".into(),
++            requested: "gpt-reserve".into(),
++        })
++    );
++    assert_eq!(interrupts(&mut ops), 1);
++    // The user's own selection is what the server echoes back.
++    chat.model_guard_user_selected("gpt-6-sol");
++    chat.set_model("gpt-6-sol");
++    chat.model_guard_settings_applied();
++    assert_eq!(chat.model_guard.as_ref().unwrap().halt, None);
++}
++
++#[tokio::test]
++async fn native_guard_reasoning_anomaly_stops_only_when_configured() {
++    for opt_in in [false, true] {
++        let (mut chat, mut ops) = running_widget().await;
++        chat.model_guard
++            .as_mut()
++            .unwrap()
++            .settings
++            .halt_on_reasoning_anomaly = opt_in;
++        chat.observe_model_guard(&route(&chat, /*actual*/ None), /*replay_kind*/ None);
++        for id in ["a", "b", "c", "d", "e"] {
++            chat.observe_model_guard(&completion(&chat, id, 516), /*replay_kind*/ None);
++        }
++        let guard = chat.model_guard.as_ref().unwrap();
++        assert_eq!(guard.alert(), "suspect");
++        assert_eq!(
++            guard.halt,
++            opt_in.then_some(Halt::Reasoning { hits: 5 }),
++            "opt_in={opt_in}"
++        );
++        assert_eq!(interrupts(&mut ops), usize::from(opt_in));
++    }
++}
++
++fn usage_limit_response(banner: serde_json::Value) -> GetAccountRateLimitsResponse {
++    serde_json::from_value(serde_json::json!({
++        "accountId": "account-a", "rateLimits": {}, "rateLimitUpsell": banner,
++    }))
++    .unwrap()
++}
++
++#[tokio::test]
++async fn native_guard_declines_codex_automatic_model_switches() {
++    let (mut chat, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
++    chat.set_model("test-model-a");
++    chat.has_chatgpt_account = true;
++    chat.requires_openai_auth = true;
++    chat.thread_id = Some(ThreadId::new());
++    let template = chat.model_catalog.try_list_models().unwrap()[0].clone();
++    let models = ["test-model-b", "gpt-reserve"].map(|model| ModelPreset {
++        model: model.into(),
++        show_in_picker: model != "gpt-reserve",
++        ..template.clone()
++    });
++    chat.model_catalog = Arc::new(ModelCatalog::new(models.to_vec()));
++    chat.model_guard = Some(ModelGuard {
++        selected: Some("test-model-a".into()),
++        ..ModelGuard::default()
++    });
++    // A blocked model with fallback candidates.
++    chat.update_backend_banner(&usage_limit_response(serde_json::json!({
++        "banner_type": "selected_model_limit", "blocked_model_slug": "test-model-a",
++        "fallback_model_slugs": ["test-model-b"], "presentation": "inline",
++        "title": "Selected model usage exhausted", "description": "Switch.", "ctas": [],
++    })));
++    assert_eq!(chat.backend_banner_fallback(), None);
++    assert_eq!(
++        chat.model_guard.as_ref().unwrap().refused_switch,
++        Some(("test-model-a".into(), "test-model-b".into()))
++    );
++    assert_eq!(chat.current_model(), "test-model-a");
++    assert!(lines(&chat).contains("automatic switch to test-model-b refused"));
++    // The Reserve banner: no switch, no held input, no Reserve-only picker.
++    chat.update_backend_banner(&usage_limit_response(serde_json::json!({
++        "banner_type": "luna_reserve", "presentation": "dismissible",
++        "title": "You’re now using Luna", "description": "Add credits.", "ctas": [],
++    })));
++    assert_eq!(chat.backend_banner_fallback(), None);
++    assert_eq!(
++        chat.model_guard.as_ref().unwrap().refused_switch,
++        Some(("test-model-a".into(), "gpt-reserve".into()))
++    );
++    assert!(!chat.waiting_for_luna_reserve());
++    assert!(!chat.input_queue.rate_limit_recovery_pending);
++    chat.set_model("gpt-reserve");
++    assert!(!chat.restrict_model_picker_to_luna_reserve());
++    chat.set_model("test-model-a");
++    // The same offers switch the thread as soon as the guard is absent.
++    chat.model_guard = None;
++    assert_eq!(
++        chat.backend_banner_fallback()
++            .map(|switch| switch.model.model),
++        Some("gpt-reserve".into())
++    );
++    assert!(chat.waiting_for_luna_reserve());
++    // Recovered usage ends the refusal.
++    chat.model_guard = Some(ModelGuard {
++        selected: Some("test-model-a".into()),
++        refused_switch: Some(("test-model-a".into(), "gpt-reserve".into())),
++        ..ModelGuard::default()
++    });
++    chat.update_backend_banner(
++        &serde_json::from_value(serde_json::json!({
++            "accountId": "account-a", "ordinaryUsageAllowed": true, "rateLimits": {},
++        }))
++        .unwrap(),
++    );
++    assert_eq!(chat.model_guard.as_ref().unwrap().refused_switch, None);
++}
++
++#[tokio::test]
++async fn native_guard_recovery_only_returns_to_the_selection_and_keeps_the_stop() {
++    let (mut chat, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
++    chat.thread_id = Some(ThreadId::new());
++    chat.model_guard = Some(guard());
++    chat.set_model("gpt-reserve");
++    chat.model_guard_session_configured();
++    assert!(chat.model_guard.as_ref().unwrap().halt.is_some());
++    assert!(chat.model_guard_allows_recovery_to("gpt-6-astra"));
++    assert!(!chat.model_guard_allows_recovery_to("gpt-6-sol"));
++    let mut mode = chat.effective_collaboration_mode();
++    mode.settings.model = "gpt-6-astra".into();
++    chat.finish_backend_banner_fallback(mode);
++    let guard = chat.model_guard.as_ref().unwrap();
++    assert_eq!(chat.current_model(), "gpt-6-astra");
++    assert_eq!(guard.selected.as_deref(), Some("gpt-6-astra"));
++    assert!(
++        guard.halt.is_some(),
++        "Codex's own recovery never lifts a stop"
++    );
++    chat.model_guard = None;
++    assert!(chat.model_guard_allows_recovery_to("gpt-6-sol"));
++}
 diff --git a/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_140.snap b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_140.snap
 new file mode 100644
-index 0000000..ef49db7
+index 0000000..d7b3d25
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_140.snap
-@@ -0,0 +1,11 @@
+@@ -0,0 +1,10 @@
 +---
 +source: tui/src/chatwidget/model_guard_tests.rs
-+assertion_line: 196
-+expression: "buf.content.chunks(usize::from(width)).map(|row|\nrow.iter().map(|cell|\ncell.symbol()).collect::<String>().trim_end().to_owned()).collect::<Vec<_>>().join(\"\\n\")"
++expression: "buf.content.chunks(usize::from(width)).map(|row|\nrow.iter().map(ratatui::buffer::Cell::symbol).collect::<String>().trim_end().to_owned()).collect::<Vec<_>>().join(\"\\n\")"
 +---
 +
 +
 +› Ask Codex to do anything
 +
 +   request gpt-6-astra · max · /tmp/project
-+ ROUTE DIFF gpt-6-astra → gpt-4o
++ STOPPED · ROUTE DIFF gpt-6-astra → gpt-4o · /model to continue
 diff --git a/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_40.snap b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_40.snap
 new file mode 100644
-index 0000000..a061c72
+index 0000000..7a98d43
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_40.snap
 @@ -0,0 +1,11 @@
 +---
 +source: tui/src/chatwidget/model_guard_tests.rs
-+assertion_line: 196
-+expression: "buf.content.chunks(usize::from(width)).map(|row|\nrow.iter().map(|cell|\ncell.symbol()).collect::<String>().trim_end().to_owned()).collect::<Vec<_>>().join(\"\\n\")"
++expression: "buf.content.chunks(usize::from(width)).map(|row|\nrow.iter().map(ratatui::buffer::Cell::symbol).collect::<String>().trim_end().to_owned()).collect::<Vec<_>>().join(\"\\n\")"
 +---
 +
 +
 +› Ask Codex to do anything
 +
 +   request gpt-6-astra · max · /tmp/pro…
-+ ROUTE DIFF gpt-6-astra → gpt-4o
++ STOPPED · ROUTE DIFF gpt-6-astra →
++gpt-4o · /model to continue
 diff --git a/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_80.snap b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_80.snap
 new file mode 100644
-index 0000000..ef49db7
+index 0000000..d7b3d25
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_80.snap
-@@ -0,0 +1,11 @@
+@@ -0,0 +1,10 @@
 +---
 +source: tui/src/chatwidget/model_guard_tests.rs
-+assertion_line: 196
-+expression: "buf.content.chunks(usize::from(width)).map(|row|\nrow.iter().map(|cell|\ncell.symbol()).collect::<String>().trim_end().to_owned()).collect::<Vec<_>>().join(\"\\n\")"
++expression: "buf.content.chunks(usize::from(width)).map(|row|\nrow.iter().map(ratatui::buffer::Cell::symbol).collect::<String>().trim_end().to_owned()).collect::<Vec<_>>().join(\"\\n\")"
 +---
 +
 +
 +› Ask Codex to do anything
 +
 +   request gpt-6-astra · max · /tmp/project
-+ ROUTE DIFF gpt-6-astra → gpt-4o
++ STOPPED · ROUTE DIFF gpt-6-astra → gpt-4o · /model to continue
 diff --git a/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_wrapped_warning_0.snap b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_wrapped_warning_0.snap
 new file mode 100644
 index 0000000..5e59e5f
@@ -504,13 +953,12 @@ index 0000000..5e59e5f
 +5 responses used 516 tokens
 diff --git a/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_wrapped_warning_1.snap b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_wrapped_warning_1.snap
 new file mode 100644
-index 0000000..6e41fca
+index 0000000..afe1737
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_wrapped_warning_1.snap
 @@ -0,0 +1,13 @@
 +---
 +source: tui/src/chatwidget/model_guard_tests.rs
-+assertion_line: 352
 +expression: text
 +---
 +                                        
@@ -518,6 +966,7 @@ index 0000000..6e41fca
 +› Ask Codex to do anything              
 +                                        
 +   request requested-model-with-a-long-…
-+ ROUTE DIFF                             
++ STOPPED · ROUTE DIFF                   
 +requested-model-with-a-long-revision-and
-+-deployment-name → gpt-4o
++-deployment-name → gpt-4o · /model to   
++continue

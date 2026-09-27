@@ -1,26 +1,29 @@
 {
-  "date_utc": "2026-09-10",
-  "build_host": "Ubuntu 24.04 x86_64 (fornax-u)",
+  "date_utc": "2026-09-28",
+  "build_host": "Ubuntu 24.04 x86_64 (nomad-u), rust:1.95.0-bookworm container",
   "rust_version": "1.95.0",
-  "upstream_commit": "3d2ee51ca2d5db578f328aa75e20aa22c0197c9a",
+  "upstream_commit": "be2951ea34f0d295ed0becf97079f92fa5f6950e",
   "targeted_rust": {
     "api_sse_cases": 7,
     "core_routing_cases": 5,
-    "native_tui_cases": 15,
+    "native_tui_cases": 28,
     "app_server_protocol_cases": 298,
-    "all_passed": true
+    "all_passed": true,
+    "note": "native_guard cases were run on this release; the api/core/protocol counts are those of 1.9.0, whose patches 0001 and 0004 are byte-identical here."
   },
   "native_tui_vs_pristine": {
-    "native_passed": 4075,
-    "native_failed": 28,
-    "native_run": 4103,
-    "native_skipped": 6,
-    "baseline_passed": 4060,
-    "baseline_failed": 28,
-    "baseline_run": 4088,
-    "baseline_skipped": 6,
+    "native_passed": 4564,
+    "native_failed": 35,
+    "native_run": 4601,
+    "native_skipped": 2,
+    "baseline_passed": 4551,
+    "baseline_failed": 35,
+    "baseline_run": 4588,
+    "baseline_skipped": 2,
     "native_only_failures": [],
-    "baseline_only_failures": []
+    "baseline_only_failures": [],
+    "note": "Both runs use cargo test on the same 0.155.1 tree. Every failure is a release-tag snapshot (the snapshot header reads v0.0.0 while the built crate reports v0.155.1) or a terminal-probe test that only fails under parallel execution; the five tests whose outcome differed between parallel runs fail identically on both trees when run alone, and the guard's own 28 cases pass.",
+    "clippy": "cargo clippy -p codex-tui --tests -D warnings: clean (the guard's footer colours carry an explicit allow for the truecolor lint)"
   },
   "full_workspace": {
     "status": "blocked_by_upstream_asset",
@@ -32,12 +35,12 @@
     "The official source tag has release-version snapshot mismatches. Those snapshots were not rewritten to claim a green suite."
   ],
   "package_python": {
-    "passed": 73,
+    "passed": 77,
     "skipped": 0,
-    "tests": "State, check, reasoning, sessions/prune, installer and launcher units; official app-server SSE/WebSocket fixtures including body-label mismatch and header precedence; real PTY new/resume/fork/Fish cx resume/paste/resize, route-difference and body-label warnings with /status; stock terminal-mode and scrollback parity. Fixtures keep Codex's curated-plugin sync off the network."
+    "tests": "State, check, reasoning, sessions/prune, installer, launcher and updater units; official app-server SSE/WebSocket fixtures including body-label mismatch and header precedence; real PTY new/resume/fork/Fish cx resume/paste/resize; a disclosed route difference and a body-label difference each interrupt the turn, hold the next prompt and a /compact and are explained in /status; a thread restored on gpt-reserve stops before its first turn; stock terminal-mode and scrollback parity."
   },
   "claude": {
-    "passed": 100,
+    "passed": 108,
     "failed": 0
   },
   "source_package": {
@@ -49,6 +52,6 @@
     "model": "gpt-6-astra",
     "reasoning_effort": "high",
     "sandbox": "read-only",
-    "scope": "Body-label propagation and precedence; probe export; prune/session discovery; session-start refresh and hand-off. Seven findings (pruning through symlinked parents, environments in use by helpers, legacy link rollback, refresh ordering and locking, hand-off directory, latched label export, control characters in listed directories) were fixed and covered by regression tests."
+    "scope": "Stop semantics of 1.10.0. Ten findings (compaction and review targets enqueued around the composer, Codex's usage recovery lifting a stop, guard state lost across widget rebuilds, a running turn restored under a stop, background threads never judged, enforcement suspended after an account change, a global review-model exemption, server-pushed settings, model-bearing collaboration presets, unsanitized history text) were fixed and covered by regression tests, except the model-bearing preset case, which is documented as a stop the user clears with /model."
   }
 }

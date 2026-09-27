@@ -143,30 +143,64 @@ class NativeTerminalTests(unittest.TestCase):
                     finally:
                         terminal.close()
 
-    def test_disclosed_route_difference_is_visible(self):
+    def test_disclosed_route_difference_stops_the_turn(self):
         binary = os.environ["MODEL_GUARD_NATIVE_BIN"]
         with tempfile.TemporaryDirectory(prefix="mg-native-route-") as temp, ResponsesFixture("gpt-4o") as api:
             base = Path(temp)
             terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "Reply OK."], fixture_home(base, api), base)
             try:
-                terminal.wait(lambda: "ROUTE DIFF gpt-6-astra" in terminal.text())
+                terminal.wait(lambda: "STOPPED · ROUTE DIFF gpt-6-astra" in terminal.text() and "Model Guard interrupted this turn" in terminal.text())
+                # The stop holds every further turn until a model is selected.
+                terminal.send(b"Second prompt.")
+                terminal.wait(lambda: "Second prompt." in terminal.text())
+                terminal.send(b"\r")
+                terminal.wait(lambda: "Model Guard held this input" in terminal.text())
+                self.assertEqual(len(api.requests), 1)
+                self.assertIn("Second prompt.", terminal.text())
+                # Compaction is enqueued around the composer and meets the same hold.
+                terminal.send(b"\x15/compact")
+                terminal.wait(lambda: "/compact" in terminal.text())
+                for _ in range(5):
+                    terminal.poll()
+                terminal.send(b"\r")
+                terminal.wait(lambda: terminal.text().count("Model Guard held this input") >= 2)
+                self.assertEqual(len(api.requests), 1)
             finally:
                 terminal.close()
 
-    def test_body_label_difference_is_visible_and_explained_in_status(self):
+    def test_body_label_difference_stops_the_turn_and_is_explained_in_status(self):
         binary = os.environ["MODEL_GUARD_NATIVE_BIN"]
         with tempfile.TemporaryDirectory(prefix="mg-native-label-") as temp, ResponsesFixture(None, label="gpt-4o") as api:
             base = Path(temp)
             terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "Reply OK."], fixture_home(base, api), base)
             try:
-                terminal.wait(lambda: "Response labeled gpt-4o" in terminal.text() and "requested gpt-6-astra" in terminal.text())
+                terminal.wait(lambda: "STOPPED · labeled gpt-4o · requested gpt-6-astra" in terminal.text())
                 self.assertNotIn("ROUTE DIFF", terminal.text())
                 terminal.send(b"/status")
                 terminal.wait(lambda: "/status" in terminal.text())
                 for _ in range(5):
                     terminal.poll()
                 terminal.send(b"\r")
-                terminal.wait(lambda: "Response body label: gpt-4o" in terminal.text())
+                terminal.wait(lambda: "Response body label: gpt-4o" in terminal.text() and "Selected model: gpt-6-astra" in terminal.text())
+            finally:
+                terminal.close()
+
+    def test_thread_restored_on_the_reserve_model_stops_before_its_first_turn(self):
+        binary = os.environ["MODEL_GUARD_NATIVE_BIN"]
+        with tempfile.TemporaryDirectory(prefix="mg-native-reserve-") as temp, ResponsesFixture(None, label="gpt-reserve") as api:
+            base = Path(temp)
+            env = fixture_home(base, api)
+            # The thread was last used on Codex's reserve model; the configured model is still gpt-6-astra.
+            seed = subprocess.run([binary, "-c", "model='gpt-reserve'", "exec", "--skip-git-repo-check", "--json", "--sandbox", "read-only", "Reply OK."], env=env, cwd=base, capture_output=True, text=True, timeout=90, check=True)
+            thread = next(json.loads(line)["thread_id"] for line in seed.stdout.splitlines() if json.loads(line).get("type") == "thread.started")
+            self.assertEqual(api.requests[-1]["model"], "gpt-reserve")
+            terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "resume", thread, "Reply again."], env, base)
+            try:
+                terminal.wait(lambda: "STOPPED · request gpt-reserve · selected gpt-6-astra" in terminal.text() and "Model Guard held this input" in terminal.text())
+                for _ in range(10):
+                    terminal.poll()
+                self.assertEqual(len(api.requests), 1)
+                self.assertIn("Reply again.", terminal.text())
             finally:
                 terminal.close()
 

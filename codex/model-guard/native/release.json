@@ -1,5 +1,5 @@
 {
-  "plugin_version": "1.9.0",
+  "plugin_version": "1.10.0",
   "codex_version": "0.155.1",
   "upstream_repository": "https://github.com/openai/codex.git",
   "upstream_ref": "rust-v0.155.1",
@@ -13,11 +13,11 @@
     },
     {
       "file": "0002-native-status-line.patch",
-      "sha256": "baa823701ddfa27f665da77271824af81cdedc4183f13272b802c3dc82c522ae"
+      "sha256": "c1b9d3f69381752bc6a7d962375b45b938a29b07bc972b567da65c2fce12d069"
     },
     {
       "file": "0003-native-status-line-tests.patch",
-      "sha256": "eb85c59d829abdd356bd0ae2095702f86b0660ce5c5973177ab6f5d41eb55bda"
+      "sha256": "37db419ba7202cdaa31fcc18b7c2cbd51509d6c42d7a85c32f5d228ae2fe2c2a"
     },
     {
       "file": "0004-protocol-schemas.patch",
@@ -25,7 +25,7 @@
     },
     {
       "file": "0005-release-packaging.patch",
-      "sha256": "6e8073b4179ed81a2d10acd7e863a38775de096a9a6f49d934a53349a1c02f8d"
+      "sha256": "777f51f0795697784ab2e988aa1596f6617c252deb364d1eb94a056b34565a40"
     },
     {
       "file": "0006-update-hand-off.patch",
@@ -39,7 +39,7 @@
     "codex-path/rg": "e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849",
     "codex-resources/voice/manifest.json": "4356f350ea66c789b0ac294fa869cfffcafa7088bb9f7fc69ceba02471207687"
   },
-  "sha256": "9d21652c9fad855feb218b4601c545332003df7503cf60ba6dd4b19bff1e3ffc",
-  "url": "https://github.com/ventusff/cli-model-guard/releases/download/v1.9.0/model-guard-codex-linux-x86_64.tar.gz",
-  "binary_sha256": "c9175232aa1c49b10f22398ce4b9495d677be3bd576d587553e5a93b38bceec6"
+  "sha256": "0542d51a62b37462dd0bd27fcc24824d4680f39af524ea6e1d06f0a9729836c9",
+  "url": "https://github.com/ventusff/cli-model-guard/releases/download/v1.10.0/model-guard-codex-linux-x86_64.tar.gz",
+  "binary_sha256": "bff586aafc7ef4ae947713107a1f8b76577da75438b37e5a3e54957216d73464"
 }

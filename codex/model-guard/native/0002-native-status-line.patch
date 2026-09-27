@@ -12,18 +12,121 @@ index 0054f79..eefd7ef 100644
          ServerNotification::ModelVerification(notification) => {
              Some(notification.thread_id.as_str())
          }
+diff --git a/codex-rs/tui/src/app/config_persistence.rs b/codex-rs/tui/src/app/config_persistence.rs
+index d1ca848..c017fb3 100644
+--- a/codex-rs/tui/src/app/config_persistence.rs
++++ b/codex-rs/tui/src/app/config_persistence.rs
+@@ -1013,6 +1013,7 @@ impl App {
+             self.config.model = Some(model.to_string());
+             self.config.model_reasoning_effort = Some(default_effort.clone());
+         }
++        self.chat_widget.model_guard_user_selected(model);
+         self.chat_widget.set_model(model);
+         self.chat_widget.set_reasoning_effort(Some(effort.clone()));
+         self.chat_widget
+diff --git a/codex-rs/tui/src/app/event_dispatch.rs b/codex-rs/tui/src/app/event_dispatch.rs
+index bcd076f..dc4c9a9 100644
+--- a/codex-rs/tui/src/app/event_dispatch.rs
++++ b/codex-rs/tui/src/app/event_dispatch.rs
+@@ -820,6 +820,12 @@ impl App {
+                     return Ok(AppRunControl::Continue);
+                 }
+                 if self.active_thread_id == self.chat_widget.thread_id() {
++                    // Commands enqueued around the widget (`/compact`, review
++                    // targets, turns queued before a stop) meet the guard here.
++                    if let Some(message) = self.chat_widget.model_guard_block_message(&op) {
++                        self.chat_widget.add_error_message(message);
++                        return Ok(AppRunControl::Continue);
++                    }
+                     if matches!(&op, AppCommand::UserTurn { .. })
+                         && self.chat_widget.defer_pending_turn_for_luna_reserve()
+                     {
+@@ -1370,6 +1376,11 @@ impl App {
+             AppEvent::RefreshRateLimits { origin } => {
+                 self.refresh_rate_limits(app_server, origin);
+             }
++            AppEvent::ModelGuardInterrupt { thread_id, turn_id } => {
++                if let Err(err) = app_server.turn_interrupt(thread_id, turn_id).await {
++                    tracing::warn!(%thread_id, "Model Guard could not interrupt the stopped thread: {err}");
++                }
++            }
+             AppEvent::ApplyBackendBannerFallback { thread_id } => {
+                 if self.active_thread_id == Some(thread_id)
+                     && self.chat_widget.thread_id() == Some(thread_id)
+@@ -1719,6 +1730,7 @@ impl App {
+                 {
+                     return Ok(AppRunControl::Continue);
+                 }
++                self.chat_widget.model_guard_user_selected(&model);
+                 let model_changed = self.chat_widget.current_model() != model
+                     || self.chat_widget.current_collaboration_mode().model() != model;
+                 if model_changed {
+diff --git a/codex-rs/tui/src/app/session_lifecycle.rs b/codex-rs/tui/src/app/session_lifecycle.rs
+index 98e03ab..a3f728a 100644
+--- a/codex-rs/tui/src/app/session_lifecycle.rs
++++ b/codex-rs/tui/src/app/session_lifecycle.rs
+@@ -502,6 +502,7 @@ impl App {
+             AppServerTarget::LocalDaemon { .. }
+         ));
+         chat_widget.inherit_backend_banner_state(&mut self.chat_widget);
++        chat_widget.inherit_model_guard(&self.chat_widget);
+         for (thread_id, entry) in self.agent_navigation.ordered_threads() {
+             chat_widget.set_collab_agent_metadata(
+                 thread_id,
+diff --git a/codex-rs/tui/src/app/thread_routing.rs b/codex-rs/tui/src/app/thread_routing.rs
+index d9ea5f1..e2f5fac 100644
+--- a/codex-rs/tui/src/app/thread_routing.rs
++++ b/codex-rs/tui/src/app/thread_routing.rs
+@@ -6,6 +6,7 @@
+ 
+ use super::session_lifecycle::ThreadAttachPresentation;
+ use super::*;
++use crate::app_event::AppEvent;
+ use crate::app_event::ThreadTitleDestination;
+ use crate::chatwidget::ThreadInputStateRestoreMode;
+ use codex_app_server_protocol::ThreadStartedNotification;
+@@ -1251,6 +1252,12 @@ impl App {
+                 guard.push_notification_ref(&notification);
+                 Some(notification)
+             } else {
++                if let Some((_, turn_id)) =
++                    crate::chatwidget::model_guard::observe_background(thread_id, &notification)
++                {
++                    self.app_event_tx
++                        .send(AppEvent::ModelGuardInterrupt { thread_id, turn_id });
++                }
+                 self.retain_inactive_realtime_transcript(thread_id, &notification);
+                 guard.push_notification(notification);
+                 None
+diff --git a/codex-rs/tui/src/app_event.rs b/codex-rs/tui/src/app_event.rs
+index 7611d89..3bd8c2f 100644
+--- a/codex-rs/tui/src/app_event.rs
++++ b/codex-rs/tui/src/app_event.rs
+@@ -633,6 +633,12 @@ pub(crate) enum AppEvent {
+         thread_id: ThreadId,
+     },
+ 
++    /// Model Guard stopped a thread no widget is showing; end its turn.
++    ModelGuardInterrupt {
++        thread_id: ThreadId,
++        turn_id: String,
++    },
++
+     /// Open the current thread goal summary/action menu.
+     OpenThreadGoalMenu {
+         thread_id: ThreadId,
 diff --git a/codex-rs/tui/src/chatwidget.rs b/codex-rs/tui/src/chatwidget.rs
-index 4e34536..9c2aa52 100644
+index 4e34536..8954a9b 100644
 --- a/codex-rs/tui/src/chatwidget.rs
 +++ b/codex-rs/tui/src/chatwidget.rs
-@@ -442,6 +442,7 @@ mod status_surfaces;
+@@ -441,6 +441,7 @@ mod status_controls;
+ mod status_surfaces;
  mod streaming;
  use self::status_surfaces::CachedProjectRootName;
++pub(crate) mod model_guard;
  mod thread_title_status;
-+mod model_guard;
  mod thread_usage;
  pub(crate) use self::thread_usage::ThreadUsageOutcome;
- mod tokens;
 @@ -808,6 +809,7 @@ pub(crate) struct ChatWidget {
      status_line_workspace_messages_disabled: bool,
      // Cached backend-estimated cost and bounded refresh state for the current thread.
@@ -32,6 +135,86 @@ index 4e34536..9c2aa52 100644
      // Current thread-goal status shown in the status line when plan mode is inactive.
      current_goal_status_indicator: Option<GoalStatusIndicator>,
      current_goal_status: Option<GoalStatusState>,
+@@ -1828,6 +1830,10 @@ impl ChatWidget {
+         if self.rejects_misalignment_policy_op(&op) {
+             return false;
+         }
++        if let Some(message) = self.model_guard_block_message(&op) {
++            self.add_error_message(message);
++            return false;
++        }
+         if self.blocks_direct_input
+             && matches!(
+                 &op,
+diff --git a/codex-rs/tui/src/chatwidget/backend_banners.rs b/codex-rs/tui/src/chatwidget/backend_banners.rs
+index 6f2fac4..3771947 100644
+--- a/codex-rs/tui/src/chatwidget/backend_banners.rs
++++ b/codex-rs/tui/src/chatwidget/backend_banners.rs
+@@ -61,7 +61,10 @@ pub(super) struct BackendBannerState {
+ impl ChatWidget {
+     pub(super) fn restrict_model_picker_to_luna_reserve(&self) -> bool {
+         // A fresh account read can allow manual recovery even without a valid saved return model.
+-        self.current_model() == LUNA_RESERVE_MODEL
++        // With Model Guard active the full picker stays available: leaving Reserve is the
++        // user's decision whether or not ordinary usage has recovered.
++        self.model_guard.is_none()
++            && self.current_model() == LUNA_RESERVE_MODEL
+             && !self.backend_banner_state.ordinary_usage_recovered
+     }
+ 
+@@ -71,7 +74,9 @@ impl ChatWidget {
+     }
+ 
+     pub(super) fn waiting_for_luna_reserve(&self) -> bool {
+-        self.current_model() != LUNA_RESERVE_MODEL
++        // Model Guard never switches to Reserve, so there is nothing to wait for.
++        self.model_guard.is_none()
++            && self.current_model() != LUNA_RESERVE_MODEL
+             && self
+                 .backend_banner_state
+                 .banner
+@@ -134,6 +139,9 @@ impl ChatWidget {
+             let model = models
+                 .into_iter()
+                 .find(|model| model.show_in_picker && model.model == previous.model)?;
++            if !self.model_guard_allows_recovery_to(&model.model) {
++                return None;
++            }
+             return Some(AutomaticModelSwitch {
+                 model,
+                 effort: previous.effort.clone(),
+@@ -167,6 +175,11 @@ impl ChatWidget {
+                     .cloned()
+             })
+         }?;
++        if self.model_guard.is_some() {
++            // The selected model changes only by the user's hand; the guard reports the offer.
++            self.model_guard_refuse_switch(self.current_model().to_owned(), model.model);
++            return None;
++        }
+         Some(AutomaticModelSwitch {
+             model,
+             effort: self.current_reasoning_effort(),
+@@ -351,6 +364,11 @@ impl ChatWidget {
+                     && old.fallback_model_slugs == new.fallback_model_slugs
+             });
+         self.backend_banner_state.banner = banner;
++        if self.backend_banner_state.banner.is_none()
++            || self.backend_banner_state.ordinary_usage_recovered
++        {
++            self.model_guard_clear_refused_switch();
++        }
+         if !same_occurrence {
+             self.backend_banner_state.shown = false;
+             self.backend_banner_state.dismissed = self.reserve_notice_already_shown();
+@@ -510,6 +528,7 @@ impl ChatWidget {
+ 
+     pub(crate) fn clear_backend_banner(&mut self) {
+         self.backend_banner_state = BackendBannerState::default();
++        self.model_guard_clear_refused_switch();
+         self.backend_banner_notice_model = None;
+         self.bottom_pane
+             .dismiss_view_by_id(LUNA_RESERVE_RECOVERY_VIEW_ID);
 diff --git a/codex-rs/tui/src/chatwidget/constructor.rs b/codex-rs/tui/src/chatwidget/constructor.rs
 index e0be308..b099241 100644
 --- a/codex-rs/tui/src/chatwidget/constructor.rs
@@ -52,28 +235,110 @@ index e0be308..b099241 100644
              current_goal_status_indicator: None,
              current_goal_status: None,
              external_editor_state: ExternalEditorState::Closed,
+diff --git a/codex-rs/tui/src/chatwidget/input_submission.rs b/codex-rs/tui/src/chatwidget/input_submission.rs
+index fdfe3f6..d2a793c 100644
+--- a/codex-rs/tui/src/chatwidget/input_submission.rs
++++ b/codex-rs/tui/src/chatwidget/input_submission.rs
+@@ -164,6 +164,24 @@ impl ChatWidget {
+         {
+             return (false, None);
+         }
++        if let Some(message) = self.model_guard_hold_message() {
++            let UserMessage {
++                text,
++                text_elements,
++                local_images,
++                mention_bindings,
++                remote_image_urls,
++            } = user_message_for_restore(user_message, &history_record);
++            self.restore_held_submission(
++                text,
++                text_elements,
++                local_images,
++                mention_bindings,
++                remote_image_urls,
++            );
++            self.add_error_message(message);
++            return (false, None);
++        }
+         if (!user_message.local_images.is_empty() || !user_message.remote_image_urls.is_empty())
+             && !self.current_model_supports_images()
+         {
+@@ -508,7 +526,28 @@ impl ChatWidget {
+         mention_bindings: Vec<MentionBinding>,
+         remote_image_urls: Vec<String>,
+     ) {
+-        // Preserve the user's composed payload so they can retry after changing models.
++        self.restore_held_submission(
++            text,
++            text_elements,
++            local_images,
++            mention_bindings,
++            remote_image_urls,
++        );
++        self.add_to_history(history_cell::new_warning_event(
++            self.image_inputs_not_supported_message(),
++        ));
++        self.request_redraw();
++    }
++
++    /// Preserve the user's composed payload so they can retry after changing models.
++    pub(super) fn restore_held_submission(
++        &mut self,
++        text: String,
++        text_elements: Vec<TextElement>,
++        local_images: Vec<LocalImageAttachment>,
++        mention_bindings: Vec<MentionBinding>,
++        remote_image_urls: Vec<String>,
++    ) {
+         let local_image_paths = local_images.iter().map(|img| img.path.clone()).collect();
+         self.set_remote_image_urls(remote_image_urls);
+         self.bottom_pane.set_composer_text_with_mention_bindings(
+@@ -517,9 +556,6 @@ impl ChatWidget {
+             local_image_paths,
+             mention_bindings,
+         );
+-        self.add_to_history(history_cell::new_warning_event(
+-            self.image_inputs_not_supported_message(),
+-        ));
+         self.request_redraw();
+     }
+ }
 diff --git a/codex-rs/tui/src/chatwidget/model_guard.rs b/codex-rs/tui/src/chatwidget/model_guard.rs
 new file mode 100644
-index 0000000..7c47e89
+index 0000000..7ff28f5
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/model_guard.rs
-@@ -0,0 +1,328 @@
+@@ -0,0 +1,678 @@
 +//! Native routing and reasoning metadata for this widget's thread only.
 +//!
 +//! This surface participates in Codex's normal layout. It neither controls the
 +//! terminal nor selects a thread from background app-server traffic.
++//!
++//! The guard also remembers the model the user selected. A sampling request
++//! for another model, an effective-model header naming another model or a
++//! response body labeled with another model stops the thread: the running
++//! turn is interrupted and no further turn is sent until the user selects a
++//! model again. Codex's own automatic model switches are declined while the
++//! guard is active, so the selected model only changes by the user's hand.
 +
 +use super::*;
 +use codex_app_server_protocol::ModelRoutingUpdatedNotification;
 +use codex_app_server_protocol::TokenUsageBreakdown;
++use std::collections::HashMap;
 +use std::collections::VecDeque;
 +use std::io::Read;
++use std::sync::LazyLock;
++use std::sync::Mutex;
 +
 +#[derive(serde::Deserialize)]
 +#[serde(default)]
 +pub(super) struct GuardSettings {
 +    language: String,
 +    show_account: bool,
++    /// Also stop on the repeated-516 reasoning heuristic. Off by default: the
++    /// count is a statistical signal, not a disclosed route.
++    halt_on_reasoning_anomaly: bool,
 +}
 +
 +impl Default for GuardSettings {
@@ -81,6 +346,7 @@ index 0000000..7c47e89
 +        Self {
 +            language: "en".into(),
 +            show_account: true,
++            halt_on_reasoning_anomaly: false,
 +        }
 +    }
 +}
@@ -93,9 +359,139 @@ index 0000000..7c47e89
 +    tier: Option<String>,
 +}
 +
++/// Why the thread is stopped. A halt persists until the user selects a model.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub(crate) enum Halt {
++    /// The client requested a model other than the selected one.
++    Request { selected: String, requested: String },
++    /// The effective-model header named another model.
++    Route { requested: String, actual: String },
++    /// The response body was labeled with another model.
++    Label { requested: String, label: String },
++    /// The opt-in reasoning heuristic fired.
++    Reasoning { hits: usize },
++}
++
++impl Halt {
++    /// Disclosed causes outrank the heuristic; a request for another model
++    /// outranks everything, since the client itself changed the model.
++    fn rank(&self) -> u8 {
++        match self {
++            Halt::Request { .. } => 3,
++            Halt::Route { .. } => 2,
++            Halt::Label { .. } => 1,
++            Halt::Reasoning { .. } => 0,
++        }
++    }
++
++    fn outranks(&self, current: Option<&Halt>) -> bool {
++        current.is_none_or(|current| current.rank() < self.rank())
++    }
++}
++
++/// The stop a sampling request calls for, in rank order: the request names a
++/// model other than the selection (`review` is the one other model a review
++/// turn may use), the effective-model header names another model, or the body
++/// label belongs to another family or size tier.
++fn routing_halt(
++    selected: Option<&str>,
++    review: Option<&str>,
++    n: &ModelRoutingUpdatedNotification,
++) -> Option<Halt> {
++    let named = |candidate: Option<&str>| {
++        candidate.is_some_and(|candidate| candidate.eq_ignore_ascii_case(&n.requested_model))
++    };
++    if let Some(selected) = selected
++        && !named(Some(selected))
++        && !named(review)
++    {
++        return Some(Halt::Request {
++            selected: selected.to_owned(),
++            requested: n.requested_model.clone(),
++        });
++    }
++    if let Some(actual) = n.server_model.as_deref()
++        && !actual.eq_ignore_ascii_case(&n.requested_model)
++    {
++        return Some(Halt::Route {
++            requested: n.requested_model.clone(),
++            actual: actual.to_owned(),
++        });
++    }
++    if let Some(label) = n.response_label.as_deref()
++        && !label_consistent(&n.requested_model, label)
++    {
++        return Some(Halt::Label {
++            requested: n.requested_model.clone(),
++            label: label.to_owned(),
++        });
++    }
++    None
++}
++
++/// What this process remembers about a thread, whichever widget shows it:
++/// the model the user selected there and whether it is stopped. A stop stays
++/// in force across thread switches, side conversations and widget rebuilds.
++#[derive(Clone, Debug, Default, PartialEq, Eq)]
++pub(crate) struct ThreadGuard {
++    pub(crate) selected: Option<String>,
++    pub(crate) halt: Option<Halt>,
++}
++
++static THREADS: LazyLock<Mutex<HashMap<ThreadId, ThreadGuard>>> = LazyLock::new(Mutex::default);
++
++pub(crate) fn thread_guard(thread: ThreadId) -> Option<ThreadGuard> {
++    THREADS.lock().ok()?.get(&thread).cloned()
++}
++
++fn remember_thread(thread: ThreadId, state: ThreadGuard) {
++    if let Ok(mut threads) = THREADS.lock() {
++        threads.insert(thread, state);
++    }
++}
++
++/// Judge a routing notification for a thread no widget is showing. A new stop
++/// is remembered for the thread and returned with the turn to interrupt.
++pub(crate) fn observe_background(
++    thread: ThreadId,
++    notification: &ServerNotification,
++) -> Option<(Halt, String)> {
++    let (halt, turn_id) = match notification {
++        ServerNotification::ModelRoutingUpdated(n) => {
++            let selected = thread_guard(thread).and_then(|state| state.selected);
++            (
++                routing_halt(selected.as_deref(), /*review*/ None, n)?,
++                n.turn_id.clone(),
++            )
++        }
++        ServerNotification::ModelRerouted(n) => (
++            Halt::Route {
++                requested: n.from_model.clone(),
++                actual: n.to_model.clone(),
++            },
++            n.turn_id.clone(),
++        ),
++        _ => return None,
++    };
++    let mut threads = THREADS.lock().ok()?;
++    let state = threads.entry(thread).or_default();
++    if !halt.outranks(state.halt.as_ref()) {
++        return None;
++    }
++    state.halt = Some(halt.clone());
++    Some((halt, turn_id))
++}
++
 +#[derive(Default)]
 +pub(super) struct ModelGuard {
 +    settings: GuardSettings,
++    /// The model the user chose: the configured default, or the last manual selection.
++    pub(super) selected: Option<String>,
++    /// A configured review model is the only other model a request may name.
++    review: Option<String>,
++    pub(super) halt: Option<Halt>,
++    /// An automatic switch the guard declined: the blocked model and the offered one.
++    pub(super) refused_switch: Option<(String, String)>,
 +    turn_id: Option<String>,
 +    running: bool,
 +    suspended: bool,
@@ -139,8 +535,32 @@ index 0000000..7c47e89
 +            .unwrap_or_default();
 +        Some(Self {
 +            settings,
++            selected: config.model.clone(),
++            review: config.review_model.clone(),
 +            ..Self::default()
 +        })
++    }
++
++    pub(super) fn language_zh(&self) -> bool {
++        self.settings.language == "zh"
++    }
++
++    /// Whether the thread may run on `model`: the selection, or the configured
++    /// review model while a review turn runs.
++    fn accepts(&self, model: &str, review_turn: bool) -> bool {
++        let named = |candidate: &Option<String>| {
++            candidate
++                .as_deref()
++                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(model))
++        };
++        self.selected.is_none() || named(&self.selected) || (review_turn && named(&self.review))
++    }
++
++    fn thread_state(&self) -> ThreadGuard {
++        ThreadGuard {
++            selected: self.selected.clone(),
++            halt: self.halt.clone(),
++        }
 +    }
 +
 +    fn start_turn(&mut self, turn_id: &str, scope: Scope) {
@@ -179,6 +599,7 @@ index 0000000..7c47e89
 +        self.route = None;
 +        self.mismatch = None;
 +        self.label_mismatch = None;
++        self.refused_switch = None;
 +        // Responses already in flight can still be billed to the prior login.
 +        self.suspended = self.running;
 +    }
@@ -209,23 +630,22 @@ index 0000000..7c47e89
 +        self.turn_hits += usize::from(tokens == 516);
 +    }
 +
++    fn recent_hits(&self) -> usize {
++        self.samples
++            .iter()
++            .rev()
++            .take(5)
++            .filter(|&&n| n == 516)
++            .count()
++    }
++
 +    fn alert(&self) -> &'static str {
 +        let high = self
 +            .scope
 +            .as_ref()
 +            .and_then(|scope| scope.effort.as_deref())
 +            .is_some_and(|effort| matches!(effort, "high" | "xhigh" | "max" | "ultra"));
-+        if high
-+            && self.samples.len() >= 5
-+            && self
-+                .samples
-+                .iter()
-+                .rev()
-+                .take(5)
-+                .filter(|&&n| n == 516)
-+                .count()
-+                >= 3
-+        {
++        if high && self.samples.len() >= 5 && self.recent_hits() >= 3 {
 +            "suspect"
 +        } else if high && self.turn_hits > 0 {
 +            "watch"
@@ -252,13 +672,168 @@ index 0000000..7c47e89
 +            return;
 +        }
 +        let scope = self.model_guard_selected_scope();
++        let mut stopped_turn_running = false;
 +        if let Some(guard) = self.model_guard.as_mut() {
 +            if turn.status == TurnStatus::InProgress {
 +                guard.start_turn(&turn.id, scope);
++                stopped_turn_running = guard.halt.is_some();
 +            } else if guard.turn_id.as_ref() == Some(&turn.id) {
 +                guard.running = false;
 +            }
 +        }
++        if stopped_turn_running {
++            self.submit_op(AppCommand::interrupt());
++        }
++    }
++
++    fn remember_model_guard(&self) {
++        if let (Some(thread), Some(guard)) = (self.thread_id, self.model_guard.as_ref()) {
++            remember_thread(thread, guard.thread_state());
++        }
++    }
++
++    /// A replacement widget keeps the previous one's selection; the thread it
++    /// will show restores its own stop and selection once configured.
++    pub(crate) fn inherit_model_guard(&mut self, previous: &ChatWidget) {
++        if let (Some(guard), Some(inherited)) =
++            (self.model_guard.as_mut(), previous.model_guard.as_ref())
++        {
++            guard.selected = inherited.selected.clone();
++        }
++    }
++
++    /// The user chose `model`: it becomes the selection and lifts any halt.
++    pub(crate) fn model_guard_user_selected(&mut self, model: &str) {
++        let Some(guard) = self.model_guard.as_mut() else {
++            return;
++        };
++        guard.selected = Some(model.to_owned());
++        guard.halt = None;
++        guard.refused_switch = None;
++        self.remember_model_guard();
++        self.refresh_status_line();
++        self.request_redraw();
++    }
++
++    /// A configured thread adopts what this process remembers about it, then
++    /// stops before its first turn if its model is not the selection; a thread
++    /// restored on Codex's reserve model is the usual case.
++    pub(super) fn model_guard_session_configured(&mut self) {
++        let Some(thread) = self.thread_id else {
++            return;
++        };
++        let Some(guard) = self.model_guard.as_mut() else {
++            return;
++        };
++        if let Some(state) = thread_guard(thread) {
++            guard.selected = state.selected.or_else(|| guard.selected.take());
++            guard.halt = state.halt;
++        }
++        let zh = guard.language_zh();
++        let remembered = guard.halt.clone();
++        self.model_guard_check_current_model();
++        if let Some(halt) = remembered
++            && self
++                .model_guard
++                .as_ref()
++                .and_then(|guard| guard.halt.as_ref())
++                == Some(&halt)
++        {
++            self.add_error_message(display::halt_message(&halt, zh, /*interrupted*/ false));
++        }
++        self.remember_model_guard();
++    }
++
++    /// The thread's settings changed: a model other than the selection stops it.
++    pub(super) fn model_guard_settings_applied(&mut self) {
++        self.model_guard_check_current_model();
++    }
++
++    fn model_guard_check_current_model(&mut self) {
++        let model = self.current_model().to_owned();
++        let Some(guard) = self.model_guard.as_mut() else {
++            return;
++        };
++        match guard.selected.as_deref() {
++            None => {
++                guard.selected = Some(model);
++                self.remember_model_guard();
++            }
++            Some(selected) if !guard.accepts(&model, /*review_turn*/ false) => {
++                let halt = Halt::Request {
++                    selected: selected.to_owned(),
++                    requested: model,
++                };
++                self.model_guard_halt(halt);
++            }
++            Some(_) => {}
++        }
++    }
++
++    /// Codex's own switch back to the model it left for Reserve is allowed
++    /// only when that model is the selection; the stop, if any, stays.
++    pub(super) fn model_guard_allows_recovery_to(&self, model: &str) -> bool {
++        self.model_guard
++            .as_ref()
++            .is_none_or(|guard| guard.accepts(model, /*review_turn*/ false))
++    }
++
++    /// While the thread is stopped, the message that explains why input is held.
++    pub(super) fn model_guard_hold_message(&self) -> Option<String> {
++        let guard = self.model_guard.as_ref()?;
++        let halt = guard.halt.as_ref()?;
++        Some(display::blocked_message(halt, guard.language_zh()))
++    }
++
++    /// Whether `op` would start a turn on a stopped thread; the message explains why.
++    pub(crate) fn model_guard_block_message(&self, op: &AppCommand) -> Option<String> {
++        matches!(
++            op,
++            AppCommand::UserTurn { .. } | AppCommand::Review { .. } | AppCommand::Compact
++        )
++        .then(|| self.model_guard_hold_message())
++        .flatten()
++    }
++
++    /// Codex offered to switch this thread from `blocked` to `offered` on its
++    /// own. The guard keeps the selection and says so once per offer.
++    pub(super) fn model_guard_refuse_switch(&mut self, blocked: String, offered: String) {
++        let Some(guard) = self.model_guard.as_mut() else {
++            return;
++        };
++        let refused = (blocked, offered);
++        if guard.refused_switch.as_ref() == Some(&refused) {
++            return;
++        }
++        guard.refused_switch = Some(refused.clone());
++        let zh = guard.language_zh();
++        self.add_warning_message(display::refused_switch_message(&refused, zh));
++        self.refresh_status_line();
++    }
++
++    pub(super) fn model_guard_clear_refused_switch(&mut self) {
++        if let Some(guard) = self.model_guard.as_mut() {
++            guard.refused_switch = None;
++        }
++    }
++
++    fn model_guard_halt(&mut self, halt: Halt) {
++        let Some(guard) = self.model_guard.as_mut() else {
++            return;
++        };
++        let first = guard.halt.is_none();
++        if !halt.outranks(guard.halt.as_ref()) {
++            return;
++        }
++        guard.halt = Some(halt.clone());
++        let zh = guard.language_zh();
++        let running =
++            first && (self.turn_lifecycle.agent_turn_running || self.bottom_pane.is_task_running());
++        if running {
++            self.submit_op(AppCommand::interrupt());
++        }
++        self.add_error_message(display::halt_message(&halt, zh, running));
++        self.remember_model_guard();
 +    }
 +
 +    pub(super) fn observe_model_guard(
@@ -290,12 +865,18 @@ index 0000000..7c47e89
 +            return;
 +        };
 +        let current_scope = self.model_guard_selected_scope();
++        let review_turn = self.review.is_review_mode;
 +        let Some(guard) = self.model_guard.as_mut() else {
 +            return;
 +        };
++        let mut halt = None;
++        let mut stopped_turn_started = false;
 +        match notification {
 +            ServerNotification::TurnStarted(n) if n.thread_id == thread => {
 +                guard.start_turn(&n.turn.id, current_scope);
++                // A stopped thread's turn can only have been started around the
++                // guard; it ends now.
++                stopped_turn_started = guard.halt.is_some();
 +            }
 +            ServerNotification::TurnCompleted(n)
 +                if n.thread_id == thread && guard.turn_id.as_ref() == Some(&n.turn.id) =>
@@ -305,34 +886,44 @@ index 0000000..7c47e89
 +            ServerNotification::ModelRoutingUpdated(n)
 +                if n.thread_id == thread
 +                    && guard.turn_id.as_ref() == Some(&n.turn_id)
-+                    && guard.running
-+                    && !guard.suspended =>
++                    && guard.running =>
 +            {
-+                guard.activate(Some(Scope {
-+                    model: n.requested_model.clone(),
-+                    provider: n.model_provider.clone(),
-+                    effort: n.reasoning_effort.clone(),
-+                    tier: n.service_tier.clone(),
-+                }));
-+                if let Some(actual) = n.server_model.as_ref()
-+                    && !actual.eq_ignore_ascii_case(&n.requested_model)
-+                {
-+                    guard.mismatch = Some((n.requested_model.clone(), actual.clone()));
++                let review = review_turn.then_some(guard.review.as_deref()).flatten();
++                halt = routing_halt(guard.selected.as_deref(), review, n);
++                // Requests in flight across an account change are not shown
++                // under the new login, but they are still judged.
++                if !guard.suspended {
++                    guard.activate(Some(Scope {
++                        model: n.requested_model.clone(),
++                        provider: n.model_provider.clone(),
++                        effort: n.reasoning_effort.clone(),
++                        tier: n.service_tier.clone(),
++                    }));
++                    if let Some(actual) = n.server_model.as_ref()
++                        && !actual.eq_ignore_ascii_case(&n.requested_model)
++                    {
++                        guard.mismatch = Some((n.requested_model.clone(), actual.clone()));
++                    }
++                    if let Some(label) = n.response_label.as_deref()
++                        && !label_consistent(&n.requested_model, label)
++                    {
++                        guard.label_mismatch = Some((n.requested_model.clone(), label.to_owned()));
++                    }
++                    guard.route = Some(n.clone());
 +                }
-+                if let Some(label) = n.response_label.as_deref()
-+                    && !label_consistent(&n.requested_model, label)
-+                {
-+                    guard.label_mismatch = Some((n.requested_model.clone(), label.to_owned()));
-+                }
-+                guard.route = Some(n.clone());
 +            }
 +            ServerNotification::ModelRerouted(n)
 +                if n.thread_id == thread
 +                    && guard.turn_id.as_ref() == Some(&n.turn_id)
-+                    && guard.running
-+                    && !guard.suspended =>
++                    && guard.running =>
 +            {
-+                guard.mismatch = Some((n.from_model.clone(), n.to_model.clone()));
++                if !guard.suspended {
++                    guard.mismatch = Some((n.from_model.clone(), n.to_model.clone()));
++                }
++                halt = Some(Halt::Route {
++                    requested: n.from_model.clone(),
++                    actual: n.to_model.clone(),
++                });
 +            }
 +            ServerNotification::RawResponseCompleted(n)
 +                if n.thread_id == thread
@@ -346,8 +937,19 @@ index 0000000..7c47e89
 +                    guard.activate(None);
 +                }
 +                guard.observe_usage(&n.response_id, n.usage.as_ref());
++                if guard.settings.halt_on_reasoning_anomaly && guard.alert() == "suspect" {
++                    halt = Some(Halt::Reasoning {
++                        hits: guard.recent_hits(),
++                    });
++                }
 +            }
 +            _ => return,
++        }
++        if let Some(halt) = halt {
++            self.model_guard_halt(halt);
++        }
++        if stopped_turn_started {
++            self.submit_op(AppCommand::interrupt());
 +        }
 +        self.refresh_status_line();
 +        self.request_redraw();
@@ -388,15 +990,18 @@ index 0000000..7c47e89
 +mod tests;
 diff --git a/codex-rs/tui/src/chatwidget/model_guard_display.rs b/codex-rs/tui/src/chatwidget/model_guard_display.rs
 new file mode 100644
-index 0000000..84ae113
+index 0000000..86eae9a
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/model_guard_display.rs
-@@ -0,0 +1,248 @@
+@@ -0,0 +1,411 @@
 +//! Native footer content and on-demand evidence details.
 +use super::*;
 +use ratatui::style::Color;
 +
 +impl ChatWidget {
++    // Truecolor on purpose: a terminal theme can remap the ANSI palette until a
++    // red alarm renders as pink; the guard's warnings must stay red everywhere.
++    #[allow(clippy::disallowed_methods)]
 +    pub(in crate::chatwidget) fn model_guard_lines(&self) -> Option<Vec<Line<'static>>> {
 +        let guard = self.model_guard.as_ref()?;
 +        let zh = guard.settings.language == "zh";
@@ -462,8 +1067,19 @@ index 0000000..84ae113
 +        };
 +        let evidence_visible =
 +            running || guard.turn_scope.as_ref() == Some(&self.model_guard_selected_scope());
-+        let warning = if !evidence_visible {
-+            None
++        let reserve = model.eq_ignore_ascii_case(crate::model_catalog::LUNA_RESERVE_MODEL);
++        let warning = if let Some(halt) = guard.halt.as_ref() {
++            Some(halt_line(halt, zh))
++        } else if reserve {
++            Some(if zh {
++                format!("备用模型 {model} · 这是 Codex 额度用尽时的降级模型 · /model 换回去")
++            } else {
++                format!(
++                    "RESERVE MODEL {model} · Codex's fallback for exhausted usage · /model to leave it"
++                )
++            })
++        } else if !evidence_visible {
++            refused_line(guard, zh)
 +        } else if let Some((from, to)) = guard.mismatch.as_ref() {
 +            Some(format!(
 +                "{previous}{} {from} → {to}",
@@ -493,10 +1109,15 @@ index 0000000..84ae113
 +                )
 +            })
 +        } else {
-+            None
++            refused_line(guard, zh)
 +        };
 +        if let Some(warning) = warning {
-+            let style = if guard.mismatch.is_some() {
++            let style = if guard.halt.is_some() || reserve {
++                Style::default()
++                    .fg(Color::Rgb(255, 241, 242))
++                    .bg(Color::Rgb(153, 27, 27))
++                    .bold()
++            } else if guard.mismatch.is_some() {
 +                Style::default()
 +                    .fg(Color::Rgb(255, 241, 242))
 +                    .bg(Color::Rgb(127, 29, 29))
@@ -520,6 +1141,21 @@ index 0000000..84ae113
 +        };
 +        let zh = guard.settings.language == "zh";
 +        let mut details: Vec<Line<'static>> = vec!["Model Guard".bold().into()];
++        details.push(
++            match guard.selected.as_deref() {
++                Some(model) if zh => format!("已选模型: {}", safe_label(model)),
++                Some(model) => format!("Selected model: {}", safe_label(model)),
++                None if zh => "尚未确定已选模型。".to_owned(),
++                None => "No selected model yet.".to_owned(),
++            }
++            .into(),
++        );
++        if let Some(halt) = guard.halt.as_ref() {
++            details.push(safe_label(&halt_message(halt, zh, /*interrupted*/ false)).into());
++        }
++        if let Some(refused) = guard.refused_switch.as_ref() {
++            details.push(safe_label(&refused_switch_message(refused, zh)).into());
++        }
 +        if let Some(route) = guard.route.as_ref() {
 +            details.push(
 +                format!(
@@ -631,6 +1267,135 @@ index 0000000..84ae113
 +    }
 +}
 +
++fn halt_line(halt: &Halt, zh: bool) -> String {
++    let stopped = if zh { "已停止" } else { "STOPPED" };
++    let resume = if zh {
++        "/model 继续"
++    } else {
++        "/model to continue"
++    };
++    let body = match halt {
++        Halt::Request {
++            selected,
++            requested,
++        } if zh => format!("请求 {requested} · 已选 {selected}"),
++        Halt::Request {
++            selected,
++            requested,
++        } => format!("request {requested} · selected {selected}"),
++        Halt::Route { requested, actual } if zh => format!("路由变化 {requested} → {actual}"),
++        Halt::Route { requested, actual } => format!("ROUTE DIFF {requested} → {actual}"),
++        Halt::Label { requested, label } if zh => format!("响应标注 {label} · 请求 {requested}"),
++        Halt::Label { requested, label } => format!("labeled {label} · requested {requested}"),
++        Halt::Reasoning { hits } if zh => format!("推理异常 {hits}/5 次 516 tokens"),
++        Halt::Reasoning { hits } => format!("reasoning anomaly {hits}/5 × 516 tokens"),
++    };
++    format!("{stopped} · {body} · {resume}")
++}
++
++fn refused_line(guard: &ModelGuard, zh: bool) -> Option<String> {
++    let (blocked, offered) = guard.refused_switch.as_ref()?;
++    Some(if zh {
++        format!("{blocked} 额度用尽 · 已拒绝自动换到 {offered} · 等待重置或 /model 换模型")
++    } else {
++        format!("usage limit on {blocked} · automatic switch to {offered} refused · wait or /model")
++    })
++}
++
++/// The history entry written when the guard stops the thread.
++pub(super) fn halt_message(halt: &Halt, zh: bool, interrupted: bool) -> String {
++    let halt = &sanitized(halt);
++    let cause = match halt {
++        Halt::Request {
++            selected,
++            requested,
++        } if zh => format!("这次请求用的是 {requested}，不是你选的 {selected}；Codex 擅自换了模型"),
++        Halt::Request {
++            selected,
++            requested,
++        } => format!(
++            "the request used {requested}, not the selected {selected}; Codex changed the model on its own"
++        ),
++        Halt::Route { requested, actual } if zh => {
++            format!("请求 {requested}，服务端披露实际用的是 {actual}")
++        }
++        Halt::Route { requested, actual } => {
++            format!("the server reported {actual} for a request to {requested}")
++        }
++        Halt::Label { requested, label } if zh => {
++            format!("请求 {requested}，响应正文标注的是 {label}（正文标签，非响应头）")
++        }
++        Halt::Label { requested, label } => format!(
++            "the response to a request for {requested} was labeled {label} (body label, not a header)"
++        ),
++        Halt::Reasoning { hits } if zh => {
++            format!("最近 5 次响应中有 {hits} 次恰好为 516 个推理 tokens（启发式信号）")
++        }
++        Halt::Reasoning { hits } => {
++            format!("{hits} of the last 5 responses used exactly 516 reasoning tokens (heuristic)")
++        }
++    };
++    let stopped = match (zh, interrupted) {
++        (true, true) => "Model Guard 已打断本轮",
++        (true, false) => "Model Guard 已停止本会话",
++        (false, true) => "Model Guard interrupted this turn",
++        (false, false) => "Model Guard stopped this thread",
++    };
++    if zh {
++        format!("{stopped}：{cause}。在你用 /model 重新选定模型之前，不会再发出任何请求。")
++    } else {
++        format!("{stopped}: {cause}. Nothing is sent until you select a model with /model.")
++    }
++}
++
++/// The history entry written when a stopped thread refuses a new turn.
++pub(super) fn blocked_message(halt: &Halt, zh: bool) -> String {
++    let line = halt_line(&sanitized(halt), zh);
++    if zh {
++        format!("Model Guard 拦下了这条输入（{line}）。用 /model 重新选定模型后再发。")
++    } else {
++        format!(
++            "Model Guard held this input ({line}). Select a model with /model, then send it again."
++        )
++    }
++}
++
++/// The history entry written when an automatic switch is declined.
++pub(super) fn refused_switch_message((blocked, offered): &(String, String), zh: bool) -> String {
++    let (blocked, offered) = (safe_label(blocked), safe_label(offered));
++    if zh {
++        format!(
++            "{blocked} 的额度已用尽。Codex 想自动换到 {offered}，Model Guard 没有同意，模型仍是 {blocked}：在额度重置之前请求会失败，或者用 /model 自己换一个模型。"
++        )
++    } else {
++        format!(
++            "Usage limit reached for {blocked}. Codex wanted to switch to {offered} automatically; Model Guard kept {blocked}: requests fail until usage resets, or select another model with /model."
++        )
++    }
++}
++
++/// Server-written model names pass through the same filter as the footer.
++fn sanitized(halt: &Halt) -> Halt {
++    match halt {
++        Halt::Request {
++            selected,
++            requested,
++        } => Halt::Request {
++            selected: safe_label(selected),
++            requested: safe_label(requested),
++        },
++        Halt::Route { requested, actual } => Halt::Route {
++            requested: safe_label(requested),
++            actual: safe_label(actual),
++        },
++        Halt::Label { requested, label } => Halt::Label {
++            requested: safe_label(requested),
++            label: safe_label(label),
++        },
++        Halt::Reasoning { hits } => Halt::Reasoning { hits: *hits },
++    }
++}
++
 +fn safe_label(value: &str) -> String {
 +    value
 +        .chars()
@@ -698,8 +1463,20 @@ index 0fb1efd..b2143e7 100644
              let Turn {
                  id: turn_id,
                  items_view: _,
+diff --git a/codex-rs/tui/src/chatwidget/session_flow.rs b/codex-rs/tui/src/chatwidget/session_flow.rs
+index a24e369..451d98e 100644
+--- a/codex-rs/tui/src/chatwidget/session_flow.rs
++++ b/codex-rs/tui/src/chatwidget/session_flow.rs
+@@ -123,6 +123,7 @@ impl ChatWidget {
+             .set_active_reasoning_effort_baseline(effort.as_ref());
+         self.refresh_model_display();
+         self.refresh_status_surfaces();
++        self.model_guard_session_configured();
+         if previous_thread_id != self.thread_id
+             && self.should_prefetch_rate_limits()
+             && (self.current_model() == crate::model_catalog::LUNA_RESERVE_MODEL
 diff --git a/codex-rs/tui/src/chatwidget/settings.rs b/codex-rs/tui/src/chatwidget/settings.rs
-index c630d43..1bda5c8 100644
+index c630d43..c9c3a33 100644
 --- a/codex-rs/tui/src/chatwidget/settings.rs
 +++ b/codex-rs/tui/src/chatwidget/settings.rs
 @@ -259,6 +259,9 @@ impl ChatWidget {
@@ -712,11 +1489,30 @@ index c630d43..1bda5c8 100644
          self.status_account_display = status_account_display;
          self.plan_type = plan_type;
          self.has_chatgpt_account = has_chatgpt_account;
+@@ -409,6 +412,7 @@ impl ChatWidget {
+         }
+ 
+         self.apply_thread_settings(notification.thread_settings);
++        self.model_guard_settings_applied();
+     }
+ 
+     #[cfg(test)]
 diff --git a/codex-rs/tui/src/chatwidget/slash_dispatch.rs b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-index f67ece5..a9cdc39 100644
+index f67ece5..254a415 100644
 --- a/codex-rs/tui/src/chatwidget/slash_dispatch.rs
 +++ b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-@@ -488,6 +488,7 @@ impl ChatWidget {
+@@ -271,6 +271,10 @@ impl ChatWidget {
+                     self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
+                     return;
+                 }
++                if let Some(message) = self.model_guard_hold_message() {
++                    self.add_error_message(message);
++                    return;
++                }
+                 self.clear_token_usage();
+                 if !self.bottom_pane.is_task_running() {
+                     self.bottom_pane.set_task_running(/*running*/ true);
+@@ -488,6 +492,7 @@ impl ChatWidget {
                          /*refreshing_rate_limits*/ false, /*request_id*/ None,
                      );
                  }

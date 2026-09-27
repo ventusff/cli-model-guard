@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.10.0 — 2026-09-28
+
+- **Codex: a detected downgrade now stops the thread.** Codex 0.155 switches a
+  thread to its hidden reserve model (`gpt-reserve`, a GPT-5-class fallback)
+  on its own when the account's ordinary usage runs out, and switches back
+  hours later; the only notice was one info line, every later request was
+  made *for* `gpt-reserve`, and the server labeled it consistently, so the
+  1.9 guard, which compared the request with the server's disclosure, stayed
+  quiet for a whole working day. The guard now also remembers the model the
+  user selected (the configured default, or the last `/model` choice) and
+  treats three things as a downgrade: a sampling request for another model,
+  an effective-model header naming another model, and a response body labeled
+  with another family or size tier. Each one interrupts the running turn at
+  once, writes a red error into the history, puts a bold red `STOPPED` line
+  under the footer and holds every further turn (the composed prompt stays in
+  the composer) until the user selects a model with `/model`. A thread
+  restored on a different model than the configured one stops before its
+  first turn, so a session that went to sleep on `gpt-6-astra` and wakes up on
+  `gpt-reserve` cannot send a single request. The stop is remembered per
+  thread for the life of the process: switching threads, opening a side
+  conversation or coming back through the agents overview neither loses it nor
+  lifts it, a turn started on a stopped thread by any other route (`/compact`,
+  a review target, a command queued before the stop, a turn restored while
+  still running) is interrupted as well, and a thread running in the
+  background while another one is shown is judged and interrupted the moment
+  its request or disclosure differs. A model pushed by the server into the
+  thread's settings, and a request in flight across an account change, are
+  judged too. A configured `review_model` is accepted only during a review.
+- **Codex: no more automatic model switches.** While the guard is active, the
+  usage-limit switch to Luna Reserve and the fallback switches announced by
+  backend banners are declined; a warning names the blocked and offered
+  models, an amber footer line stays until usage recovers, and input is no
+  longer held for a switch that will not happen. The Reserve-only `/model`
+  picker is disabled too, so a thread stuck on `gpt-reserve` can be moved back
+  by hand. Codex's own switch back to the saved model, when usage returns, is
+  allowed only when that model is the selection, and it never lifts a stop.
+- **Codex: `gpt-reserve` is always flagged.** Whenever the active model is the
+  reserve model, whoever chose it, the footer carries a bold red
+  `RESERVE MODEL` line.
+- Codex: `config.json` gains `halt_on_reasoning_anomaly` (default `false`) to
+  also stop on the 3-of-5 exact-516 reasoning heuristic; the heuristic keeps
+  its amber warning otherwise. `/status` now starts with the selected model
+  and the reason for a stop or a refused switch.
+- Claude Code side: no behaviour change; the version moves with the release.
+
 ## 1.9.0 — 2026-09-22
 
 - **The repository is now `ventusff/cli-model-guard`** — it has carried Model
