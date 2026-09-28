@@ -55,7 +55,7 @@ def docker(image, mounts, workdir, script, jobs):
         command += ["-v", f"{host}:{guest}"]
     owned = " ".join(guest.split(":")[0] for guest in mounts.values() if not guest.endswith(":ro"))
     command += [image, "bash", "-c",
-                f"{APT}; git config --global --add safe.directory '*'; set -e; {script}; chown -R {os.getuid()}:{os.getgid()} {owned}"]
+                f"{APT}; git config --global --add safe.directory '*'; set -e\n{script.strip()}\nchown -R {os.getuid()}:{os.getgid()} {owned}"]
     run(command)
 
 
@@ -116,7 +116,8 @@ def main():
     rust = out(["python3", "-c", "import sys,tomllib; print(tomllib.loads(open(sys.argv[1]).read())['toolchain']['channel'])",
                 source / "codex-rs/rust-toolchain.toml"])
     image = f"rust:{rust}-bookworm"
-    print(f"Codex {codex_version} at {out(['git', 'rev-parse', 'HEAD'], cwd=source)}, Rust {rust}, {args.jobs} cores")
+    upstream = out(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=source)
+    print(f"Codex {codex_version} at {upstream}, Rust {rust}, {args.jobs} cores")
 
     (work / "target").mkdir(exist_ok=True)
     mounts = {str(REPO): "/repo", str(work): "/work", str(official): "/official:ro"}
