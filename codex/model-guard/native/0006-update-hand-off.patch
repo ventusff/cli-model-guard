@@ -1,8 +1,8 @@
 diff --git a/codex-rs/tui/src/update_action.rs b/codex-rs/tui/src/update_action.rs
-index 225c457..332fbf8 100644
+index 860d0bd1..ec4488ad 100644
 --- a/codex-rs/tui/src/update_action.rs
 +++ b/codex-rs/tui/src/update_action.rs
-@@ -22,6 +22,9 @@ pub enum UpdateAction {
+@@ -24,6 +24,9 @@ pub enum UpdateAction {
      StandaloneUnix,
      /// Update via `$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex`.
      StandaloneWindows,
@@ -12,7 +12,7 @@ index 225c457..332fbf8 100644
  }
  
  impl UpdateAction {
-@@ -65,6 +68,7 @@ impl UpdateAction {
+@@ -68,6 +71,7 @@ impl UpdateAction {
                      "$env:CODEX_NON_INTERACTIVE=1; irm https://chatgpt.com/codex/install.ps1 | iex",
                  ],
              ),
@@ -20,19 +20,62 @@ index 225c457..332fbf8 100644
          }
      }
  
-@@ -78,15 +82,68 @@ impl UpdateAction {
+@@ -81,15 +85,136 @@ impl UpdateAction {
  
  #[cfg(not(debug_assertions))]
  pub fn get_update_action() -> Option<UpdateAction> {
-+    let root = std::env::var_os("MODEL_GUARD_CODEX_HOME")
-+        .map(std::path::PathBuf::from)
-+        .or_else(|| dirs::home_dir().map(|home| home.join(".local/share/model-guard-codex")));
++    let root = model_guard_root();
 +    if runs_from_model_guard(root.as_deref(), std::env::current_exe().ok().as_deref()) {
 +        return Some(UpdateAction::ModelGuard);
 +    }
      UpdateAction::from_install_context(InstallContext::current())
  }
  
++/// The Model Guard installation root: `MODEL_GUARD_CODEX_HOME`, or the
++/// default under the home directory.
++#[cfg(not(debug_assertions))]
++pub(crate) fn model_guard_root() -> Option<std::path::PathBuf> {
++    std::env::var_os("MODEL_GUARD_CODEX_HOME")
++        .map(std::path::PathBuf::from)
++        .or_else(|| dirs::home_dir().map(|home| home.join(".local/share/model-guard-codex")))
++}
++
++/// The file that records an attempt to install plugin release `available`, or
++/// None when there is nothing to do: the version is installed, `auto_update`
++/// is false in the installation's `config.json`, or the attempt was made.
++#[cfg(any(not(debug_assertions), test))]
++pub(crate) fn model_guard_auto_update_marker(
++    root: &std::path::Path,
++    available: &str,
++    installed: &str,
++) -> Option<std::path::PathBuf> {
++    if available == installed {
++        return None;
++    }
++    let enabled = std::fs::read(root.join("config.json"))
++        .ok()
++        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
++        .and_then(|config| config.get("auto_update")?.as_bool())
++        .unwrap_or(true);
++    if !enabled {
++        return None;
++    }
++    let marker = root.join(format!("auto-update.{available}"));
++    (!marker.exists()).then_some(marker)
++}
++
++/// The updater next to the installed entry, or the one on `PATH`.
++#[cfg(any(not(debug_assertions), test))]
++pub(crate) fn model_guard_updater(root: &std::path::Path) -> std::path::PathBuf {
++    std::fs::read(root.join("install.json"))
++        .ok()
++        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
++        .and_then(|state| Some(std::path::PathBuf::from(state.get("entry")?.as_str()?)))
++        .and_then(|entry| Some(entry.parent()?.join("model-guard-codex")))
++        .filter(|updater| updater.is_file())
++        .unwrap_or_else(|| std::path::PathBuf::from("model-guard-codex"))
++}
++
 +/// Whether `exe` is one of the versioned native packages under the Model
 +/// Guard installation root. Both paths are canonicalized, so the entry
 +/// symlink and the package directory are compared by what they resolve to.
@@ -86,14 +129,39 @@ index 225c457..332fbf8 100644
 +        );
 +    }
 +
++    #[test]
++    fn model_guard_auto_update_runs_once_per_release_and_respects_the_setting() {
++        let root = tempfile::tempdir().expect("temp dir");
++        assert_eq!(model_guard_auto_update_marker(root.path(), "1.11.0", "1.11.0"), None);
++        let marker = model_guard_auto_update_marker(root.path(), "1.11.0", "1.10.0").expect("first attempt");
++        assert_eq!(marker, root.path().join("auto-update.1.11.0"));
++        std::fs::write(&marker, b"").expect("marker");
++        assert_eq!(model_guard_auto_update_marker(root.path(), "1.11.0", "1.10.0"), None);
++        std::fs::write(root.path().join("config.json"), br#"{"auto_update": false}"#).expect("config");
++        assert_eq!(model_guard_auto_update_marker(root.path(), "1.12.0", "1.10.0"), None);
++        let bin = root.path().join("bin");
++        std::fs::create_dir_all(&bin).expect("bin");
++        std::fs::write(bin.join("model-guard-codex"), b"").expect("updater");
++        std::fs::write(
++            root.path().join("install.json"),
++            format!(r#"{{"entry": "{}"}}"#, bin.join("codex").display()),
++        )
++        .expect("state");
++        assert_eq!(model_guard_updater(root.path()), bin.join("model-guard-codex"));
++        assert_eq!(
++            model_guard_updater(&root.path().join("elsewhere")),
++            std::path::PathBuf::from("model-guard-codex")
++        );
++    }
++
      #[test]
      fn maps_install_context_to_update_action() {
          let native_release_dir =
 diff --git a/codex-rs/tui/src/updates.rs b/codex-rs/tui/src/updates.rs
-index b801426..c0fc899 100644
+index 9bbdf310..0936b529 100644
 --- a/codex-rs/tui/src/updates.rs
 +++ b/codex-rs/tui/src/updates.rs
-@@ -60,6 +60,14 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
+@@ -60,6 +60,55 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
  // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
  const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
  const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
@@ -104,24 +172,66 @@ index b801426..c0fc899 100644
 +#[derive(Deserialize, Debug, Clone)]
 +struct ModelGuardRelease {
 +    codex_version: String,
++    plugin_version: String,
++}
++
++/// This build's plugin version, set by the package build.
++const MODEL_GUARD_VERSION: &str = match option_env!("MODEL_GUARD_VERSION") {
++    Some(version) => version,
++    None => "dev",
++};
++
++/// A Model Guard build installs the plugin's newer release itself, unless
++/// `auto_update` is false in the installation's `config.json`: the updater
++/// runs detached with its output in `update.log`, once per release, and new
++/// sessions use what it installed.
++fn model_guard_auto_update(release: &ModelGuardRelease) {
++    let Some(root) = crate::update_action::model_guard_root() else {
++        return;
++    };
++    let Some(marker) = crate::update_action::model_guard_auto_update_marker(
++        &root,
++        &release.plugin_version,
++        MODEL_GUARD_VERSION,
++    ) else {
++        return;
++    };
++    let Ok(log) = std::fs::File::create(root.join("update.log")) else {
++        return;
++    };
++    let Ok(errors) = log.try_clone() else {
++        return;
++    };
++    if std::fs::write(&marker, format!("{}\n", release.plugin_version)).is_err() {
++        return;
++    }
++    let _ = std::process::Command::new("setsid")
++        .arg("-f")
++        .arg(crate::update_action::model_guard_updater(&root))
++        .arg("update")
++        .stdin(std::process::Stdio::null())
++        .stdout(log)
++        .stderr(errors)
++        .spawn();
 +}
  
  #[derive(Deserialize, Debug, Clone)]
  struct ReleaseInfo {
-@@ -112,6 +120,17 @@ async fn check_for_update(
+@@ -113,6 +162,18 @@ async fn check_for_update(
          Some(UpdateAction::StandaloneUnix) | Some(UpdateAction::StandaloneWindows) | None => {
              fetch_latest_github_release_version(&client_pool).await?
          }
 +        Some(UpdateAction::ModelGuard) => {
-+            client_pool
++            let release = client_pool
 +                .get(MODEL_GUARD_RELEASE_URL)
 +                .headers(default_headers())
 +                .send()
 +                .await?
 +                .error_for_status()?
 +                .json::<ModelGuardRelease>()
-+                .await?
-+                .codex_version
++                .await?;
++            model_guard_auto_update(&release);
++            release.codex_version
 +        }
      };
  

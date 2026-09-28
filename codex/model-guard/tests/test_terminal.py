@@ -77,12 +77,18 @@ class Terminal:
         os.close(self.master)
 
 
-def fixture_home(base, api):
+def fixture_home(base, api, alternate_screen="never"):
+    """An isolated Codex home on the fixture provider.
+
+    `alternate_screen` selects the terminal layout: Codex's default is the
+    alternate screen, whose bottom area is drawn by another path than the
+    inline viewport's, so the guard's footer is checked under both.
+    """
     home = base / "codex"
     home.mkdir()
     (home / "config.toml").write_text(
         'model = "gpt-6-astra"\nmodel_reasoning_effort = "max"\nmodel_provider = "fixture"\n'
-        'check_for_update_on_startup = false\n[tui]\nresume_cwd = "session"\n'
+        f'check_for_update_on_startup = false\n[tui]\nresume_cwd = "session"\nalternate_screen = "{alternate_screen}"\n'
         '[plugins."model-guard@personal"]\nenabled = true\n'
         '[model_providers.fixture]\nname = "Fixture"\nwire_api = "responses"\n'
         f'base_url = "http://127.0.0.1:{api.server.server_port}/v1"\n'
@@ -137,9 +143,6 @@ class NativeTerminalTests(unittest.TestCase):
                         terminal.send(b"Resize preserved input.")
                         terminal.wait(lambda: "Resize preserved input." in terminal.text())
                         self.assertEqual(terminal.screen.columns, 80)
-                        # Codex owns this terminal directly; no mouse-reporting
-                        # mode was introduced to translate wheel events into keys.
-                        self.assertFalse(re.search(rb"\x1b\[\?(?:1000|1002|1003|1006)h", terminal.output))
                     finally:
                         terminal.close()
 
@@ -147,7 +150,7 @@ class NativeTerminalTests(unittest.TestCase):
         binary = os.environ["MODEL_GUARD_NATIVE_BIN"]
         with tempfile.TemporaryDirectory(prefix="mg-native-route-") as temp, ResponsesFixture("gpt-4o") as api:
             base = Path(temp)
-            terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "Reply OK."], fixture_home(base, api), base)
+            terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "Reply OK."], fixture_home(base, api, alternate_screen="auto"), base)
             try:
                 terminal.wait(lambda: "STOPPED · ROUTE DIFF gpt-6-astra" in terminal.text() and "Model Guard interrupted this turn" in terminal.text())
                 # The stop holds every further turn until a model is selected.

@@ -83,7 +83,8 @@ def main():
         if digest(official / relative) != release["helper_sha256"][relative]:
             raise RuntimeError(f"Official helper differs from the pinned release: {relative}")
     verify_voice(official, release)
-    env = dict(os.environ, CARGO_BUILD_JOBS=str(args.jobs), CARGO_TARGET_DIR=str(work / "target"), CARGO_PROFILE_RELEASE_DEBUG="0")
+    env = dict(os.environ, CARGO_BUILD_JOBS=str(args.jobs), CARGO_TARGET_DIR=str(work / "target"),
+               CARGO_PROFILE_RELEASE_DEBUG="0", MODEL_GUARD_VERSION=release["plugin_version"])
     run(["cargo", "+" + release["rust_version"], "build", "--locked", "--release", "-p", "codex-cli", "--bin", "codex"], cwd=source / "codex-rs", env=env)
     binary = work / "target/release/codex"
     expected = "codex-cli " + release["codex_version"] + "+model-guard." + release["plugin_version"]

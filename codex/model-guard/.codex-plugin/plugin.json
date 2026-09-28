@@ -1,6 +1,6 @@
 {
   "name": "model-guard",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "description": "Native Codex status line for model routing, reasoning anomalies and account identity.",
   "author": {
     "name": "ventusff",

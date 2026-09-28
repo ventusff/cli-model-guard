@@ -228,7 +228,7 @@ def install_locked(source, language, native_package, entry):
     if not entry.is_symlink() or os.readlink(entry) != current_target:
         raise RuntimeError("Codex entry changed during preparation; refusing to overwrite another update")
     cfg_path = root / "config.json"
-    cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {"language": "en", "show_account": True}
+    cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {"language": "en", "show_account": True, "auto_update": True}
     if language:
         cfg["language"] = language
     atomic_json(cfg_path, cfg)

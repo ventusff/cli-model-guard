@@ -1,5 +1,5 @@
 diff --git a/codex-rs/tui/src/app/app_server_event_targets.rs b/codex-rs/tui/src/app/app_server_event_targets.rs
-index 0054f79..eefd7ef 100644
+index eb5ffa6e..0d35661a 100644
 --- a/codex-rs/tui/src/app/app_server_event_targets.rs
 +++ b/codex-rs/tui/src/app/app_server_event_targets.rs
 @@ -136,6 +136,9 @@ pub(super) fn server_notification_thread_target(
@@ -13,10 +13,10 @@ index 0054f79..eefd7ef 100644
              Some(notification.thread_id.as_str())
          }
 diff --git a/codex-rs/tui/src/app/config_persistence.rs b/codex-rs/tui/src/app/config_persistence.rs
-index d1ca848..c017fb3 100644
+index d04b7457..d00fa42b 100644
 --- a/codex-rs/tui/src/app/config_persistence.rs
 +++ b/codex-rs/tui/src/app/config_persistence.rs
-@@ -1013,6 +1013,7 @@ impl App {
+@@ -1008,6 +1008,7 @@ impl App {
              self.config.model = Some(model.to_string());
              self.config.model_reasoning_effort = Some(default_effort.clone());
          }
@@ -25,10 +25,10 @@ index d1ca848..c017fb3 100644
          self.chat_widget.set_reasoning_effort(Some(effort.clone()));
          self.chat_widget
 diff --git a/codex-rs/tui/src/app/event_dispatch.rs b/codex-rs/tui/src/app/event_dispatch.rs
-index bcd076f..dc4c9a9 100644
+index 2c9303f5..87001b23 100644
 --- a/codex-rs/tui/src/app/event_dispatch.rs
 +++ b/codex-rs/tui/src/app/event_dispatch.rs
-@@ -820,6 +820,12 @@ impl App {
+@@ -999,6 +999,12 @@ impl App {
                      return Ok(AppRunControl::Continue);
                  }
                  if self.active_thread_id == self.chat_widget.thread_id() {
@@ -41,7 +41,7 @@ index bcd076f..dc4c9a9 100644
                      if matches!(&op, AppCommand::UserTurn { .. })
                          && self.chat_widget.defer_pending_turn_for_luna_reserve()
                      {
-@@ -1370,6 +1376,11 @@ impl App {
+@@ -1575,6 +1581,11 @@ impl App {
              AppEvent::RefreshRateLimits { origin } => {
                  self.refresh_rate_limits(app_server, origin);
              }
@@ -53,7 +53,7 @@ index bcd076f..dc4c9a9 100644
              AppEvent::ApplyBackendBannerFallback { thread_id } => {
                  if self.active_thread_id == Some(thread_id)
                      && self.chat_widget.thread_id() == Some(thread_id)
-@@ -1719,6 +1730,7 @@ impl App {
+@@ -1923,6 +1934,7 @@ impl App {
                  {
                      return Ok(AppRunControl::Continue);
                  }
@@ -62,10 +62,10 @@ index bcd076f..dc4c9a9 100644
                      || self.chat_widget.current_collaboration_mode().model() != model;
                  if model_changed {
 diff --git a/codex-rs/tui/src/app/session_lifecycle.rs b/codex-rs/tui/src/app/session_lifecycle.rs
-index 98e03ab..a3f728a 100644
+index 0b0089f0..8d9f839b 100644
 --- a/codex-rs/tui/src/app/session_lifecycle.rs
 +++ b/codex-rs/tui/src/app/session_lifecycle.rs
-@@ -502,6 +502,7 @@ impl App {
+@@ -519,6 +519,7 @@ impl App {
              AppServerTarget::LocalDaemon { .. }
          ));
          chat_widget.inherit_backend_banner_state(&mut self.chat_widget);
@@ -74,7 +74,7 @@ index 98e03ab..a3f728a 100644
              chat_widget.set_collab_agent_metadata(
                  thread_id,
 diff --git a/codex-rs/tui/src/app/thread_routing.rs b/codex-rs/tui/src/app/thread_routing.rs
-index d9ea5f1..e2f5fac 100644
+index a3501c3a..533af137 100644
 --- a/codex-rs/tui/src/app/thread_routing.rs
 +++ b/codex-rs/tui/src/app/thread_routing.rs
 @@ -6,6 +6,7 @@
@@ -85,7 +85,7 @@ index d9ea5f1..e2f5fac 100644
  use crate::app_event::ThreadTitleDestination;
  use crate::chatwidget::ThreadInputStateRestoreMode;
  use codex_app_server_protocol::ThreadStartedNotification;
-@@ -1251,6 +1252,12 @@ impl App {
+@@ -1262,6 +1263,12 @@ impl App {
                  guard.push_notification_ref(&notification);
                  Some(notification)
              } else {
@@ -95,14 +95,14 @@ index d9ea5f1..e2f5fac 100644
 +                    self.app_event_tx
 +                        .send(AppEvent::ModelGuardInterrupt { thread_id, turn_id });
 +                }
-                 self.retain_inactive_realtime_transcript(thread_id, &notification);
-                 guard.push_notification(notification);
-                 None
+                 if self
+                     .background_voice
+                     .as_ref()
 diff --git a/codex-rs/tui/src/app_event.rs b/codex-rs/tui/src/app_event.rs
-index 7611d89..3bd8c2f 100644
+index d2b8942f..99505dfa 100644
 --- a/codex-rs/tui/src/app_event.rs
 +++ b/codex-rs/tui/src/app_event.rs
-@@ -633,6 +633,12 @@ pub(crate) enum AppEvent {
+@@ -663,6 +663,12 @@ pub(crate) enum AppEvent {
          thread_id: ThreadId,
      },
  
@@ -116,10 +116,10 @@ index 7611d89..3bd8c2f 100644
      OpenThreadGoalMenu {
          thread_id: ThreadId,
 diff --git a/codex-rs/tui/src/chatwidget.rs b/codex-rs/tui/src/chatwidget.rs
-index 4e34536..8954a9b 100644
+index 5ca41829..094ff8a3 100644
 --- a/codex-rs/tui/src/chatwidget.rs
 +++ b/codex-rs/tui/src/chatwidget.rs
-@@ -441,6 +441,7 @@ mod status_controls;
+@@ -387,6 +387,7 @@ mod status_controls;
  mod status_surfaces;
  mod streaming;
  use self::status_surfaces::CachedProjectRootName;
@@ -127,7 +127,7 @@ index 4e34536..8954a9b 100644
  mod thread_title_status;
  mod thread_usage;
  pub(crate) use self::thread_usage::ThreadUsageOutcome;
-@@ -808,6 +809,7 @@ pub(crate) struct ChatWidget {
+@@ -761,6 +762,7 @@ pub(crate) struct ChatWidget {
      status_line_workspace_messages_disabled: bool,
      // Cached backend-estimated cost and bounded refresh state for the current thread.
      thread_usage: thread_usage::ThreadUsageState,
@@ -135,7 +135,7 @@ index 4e34536..8954a9b 100644
      // Current thread-goal status shown in the status line when plan mode is inactive.
      current_goal_status_indicator: Option<GoalStatusIndicator>,
      current_goal_status: Option<GoalStatusState>,
-@@ -1828,6 +1830,10 @@ impl ChatWidget {
+@@ -1810,6 +1812,10 @@ impl ChatWidget {
          if self.rejects_misalignment_policy_op(&op) {
              return false;
          }
@@ -147,7 +147,7 @@ index 4e34536..8954a9b 100644
              && matches!(
                  &op,
 diff --git a/codex-rs/tui/src/chatwidget/backend_banners.rs b/codex-rs/tui/src/chatwidget/backend_banners.rs
-index 6f2fac4..3771947 100644
+index 757d2f9f..dddbcc27 100644
 --- a/codex-rs/tui/src/chatwidget/backend_banners.rs
 +++ b/codex-rs/tui/src/chatwidget/backend_banners.rs
 @@ -61,7 +61,10 @@ pub(super) struct BackendBannerState {
@@ -195,7 +195,7 @@ index 6f2fac4..3771947 100644
          Some(AutomaticModelSwitch {
              model,
              effort: self.current_reasoning_effort(),
-@@ -351,6 +364,11 @@ impl ChatWidget {
+@@ -352,6 +365,11 @@ impl ChatWidget {
                      && old.fallback_model_slugs == new.fallback_model_slugs
              });
          self.backend_banner_state.banner = banner;
@@ -207,7 +207,7 @@ index 6f2fac4..3771947 100644
          if !same_occurrence {
              self.backend_banner_state.shown = false;
              self.backend_banner_state.dismissed = self.reserve_notice_already_shown();
-@@ -510,6 +528,7 @@ impl ChatWidget {
+@@ -511,6 +529,7 @@ impl ChatWidget {
  
      pub(crate) fn clear_backend_banner(&mut self) {
          self.backend_banner_state = BackendBannerState::default();
@@ -216,7 +216,7 @@ index 6f2fac4..3771947 100644
          self.bottom_pane
              .dismiss_view_by_id(LUNA_RESERVE_RECOVERY_VIEW_ID);
 diff --git a/codex-rs/tui/src/chatwidget/constructor.rs b/codex-rs/tui/src/chatwidget/constructor.rs
-index e0be308..b099241 100644
+index fb4575ab..11ae3221 100644
 --- a/codex-rs/tui/src/chatwidget/constructor.rs
 +++ b/codex-rs/tui/src/chatwidget/constructor.rs
 @@ -96,6 +96,7 @@ impl ChatWidget {
@@ -225,9 +225,9 @@ index e0be308..b099241 100644
          );
 +        let model_guard = model_guard::ModelGuard::from_config(&config);
          let mut widget = Self {
+             empty_state_animation: std::cell::RefCell::new(empty_state_animation),
              cyber_policy_notice: Default::default(),
-             app_event_tx: app_event_tx.clone(),
-@@ -267,6 +268,7 @@ impl ChatWidget {
+@@ -275,6 +276,7 @@ impl ChatWidget {
              status_line_workspace_headline_last_requested_at: None,
              status_line_workspace_messages_disabled: false,
              thread_usage: thread_usage::ThreadUsageState::default(),
@@ -236,77 +236,27 @@ index e0be308..b099241 100644
              current_goal_status: None,
              external_editor_state: ExternalEditorState::Closed,
 diff --git a/codex-rs/tui/src/chatwidget/input_submission.rs b/codex-rs/tui/src/chatwidget/input_submission.rs
-index fdfe3f6..d2a793c 100644
+index a37e938c..129e3e6b 100644
 --- a/codex-rs/tui/src/chatwidget/input_submission.rs
 +++ b/codex-rs/tui/src/chatwidget/input_submission.rs
-@@ -164,6 +164,24 @@ impl ChatWidget {
+@@ -197,6 +197,14 @@ impl ChatWidget {
          {
              return (false, None);
          }
 +        if let Some(message) = self.model_guard_hold_message() {
-+            let UserMessage {
-+                text,
-+                text_elements,
-+                local_images,
-+                mention_bindings,
-+                remote_image_urls,
-+            } = user_message_for_restore(user_message, &history_record);
-+            self.restore_held_submission(
-+                text,
-+                text_elements,
-+                local_images,
-+                mention_bindings,
-+                remote_image_urls,
-+            );
++            self.restore_user_message_to_composer(user_message_for_restore(
++                user_message,
++                &history_record,
++            ));
 +            self.add_error_message(message);
 +            return (false, None);
 +        }
          if (!user_message.local_images.is_empty() || !user_message.remote_image_urls.is_empty())
              && !self.current_model_supports_images()
          {
-@@ -508,7 +526,28 @@ impl ChatWidget {
-         mention_bindings: Vec<MentionBinding>,
-         remote_image_urls: Vec<String>,
-     ) {
--        // Preserve the user's composed payload so they can retry after changing models.
-+        self.restore_held_submission(
-+            text,
-+            text_elements,
-+            local_images,
-+            mention_bindings,
-+            remote_image_urls,
-+        );
-+        self.add_to_history(history_cell::new_warning_event(
-+            self.image_inputs_not_supported_message(),
-+        ));
-+        self.request_redraw();
-+    }
-+
-+    /// Preserve the user's composed payload so they can retry after changing models.
-+    pub(super) fn restore_held_submission(
-+        &mut self,
-+        text: String,
-+        text_elements: Vec<TextElement>,
-+        local_images: Vec<LocalImageAttachment>,
-+        mention_bindings: Vec<MentionBinding>,
-+        remote_image_urls: Vec<String>,
-+    ) {
-         let local_image_paths = local_images.iter().map(|img| img.path.clone()).collect();
-         self.set_remote_image_urls(remote_image_urls);
-         self.bottom_pane.set_composer_text_with_mention_bindings(
-@@ -517,9 +556,6 @@ impl ChatWidget {
-             local_image_paths,
-             mention_bindings,
-         );
--        self.add_to_history(history_cell::new_warning_event(
--            self.image_inputs_not_supported_message(),
--        ));
-         self.request_redraw();
-     }
- }
 diff --git a/codex-rs/tui/src/chatwidget/model_guard.rs b/codex-rs/tui/src/chatwidget/model_guard.rs
 new file mode 100644
-index 0000000..7ff28f5
+index 00000000..7ff28f5b
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/model_guard.rs
 @@ -0,0 +1,678 @@
@@ -990,7 +940,7 @@ index 0000000..7ff28f5
 +mod tests;
 diff --git a/codex-rs/tui/src/chatwidget/model_guard_display.rs b/codex-rs/tui/src/chatwidget/model_guard_display.rs
 new file mode 100644
-index 0000000..86eae9a
+index 00000000..86eae9a5
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/model_guard_display.rs
 @@ -0,0 +1,411 @@
@@ -1406,7 +1356,7 @@ index 0000000..86eae9a
 +        .collect()
 +}
 diff --git a/codex-rs/tui/src/chatwidget/protocol.rs b/codex-rs/tui/src/chatwidget/protocol.rs
-index 9ec441a..7bb0dcf 100644
+index ba0d2e40..b1c615f6 100644
 --- a/codex-rs/tui/src/chatwidget/protocol.rs
 +++ b/codex-rs/tui/src/chatwidget/protocol.rs
 @@ -15,6 +15,8 @@ impl ChatWidget {
@@ -1418,7 +1368,7 @@ index 9ec441a..7bb0dcf 100644
          if replay_kind != Some(ReplayKind::ResumeInitialMessages)
              && !self.recover_resumed_reasoning(&notification)
          {
-@@ -197,7 +199,7 @@ impl ChatWidget {
+@@ -215,7 +217,7 @@ impl ChatWidget {
              ServerNotification::SkillsChanged(_) => {
                  self.refresh_skills_for_current_cwd(/*force_reload*/ true);
              }
@@ -1428,32 +1378,50 @@ index 9ec441a..7bb0dcf 100644
                  self.on_app_server_model_verification(&notification.verifications)
              }
 diff --git a/codex-rs/tui/src/chatwidget/rendering.rs b/codex-rs/tui/src/chatwidget/rendering.rs
-index 8163ae2..6f43db7 100644
+index 36c87335..144ad350 100644
 --- a/codex-rs/tui/src/chatwidget/rendering.rs
 +++ b/codex-rs/tui/src/chatwidget/rendering.rs
-@@ -205,6 +205,17 @@ impl ChatWidget {
-                 /*top*/ 1, /*left*/ 0, /*bottom*/ 0, /*right*/ 0,
-             )),
-         );
-+        if let Some(lines) = self.model_guard_lines()
-+            && lines.len() > 1
-+        {
-+            flex.push(
-+                /*flex*/ 0,
-+                RenderableItem::Owned(Box::new(
-+                    Paragraph::new(lines.into_iter().skip(1).collect::<Vec<_>>())
-+                        .wrap(ratatui::widgets::Wrap { trim: false }),
-+                )),
-+            );
-+        }
-         RenderableItem::Owned(Box::new(flex))
+@@ -244,7 +244,8 @@ impl ChatWidget {
+             } else {
+                 self.ambient_pet_wrap_reserved_cols()
+             };
+-            self.bottom_pane
++            let pane = self
++                .bottom_pane
+                 .as_renderable_with_options(crate::bottom_pane::ComposerRenderOptions {
+                     composer_gap,
+                     working_tip,
+@@ -254,7 +255,24 @@ impl ChatWidget {
+                         != crate::bottom_pane::CommandPopupPlacement::AboveComposer,
+                     command_popup_placement,
+                     footer,
+-                })
++                });
++            // The guard's warning belongs to the bottom pane, so every layout
++            // that sizes the pane (inline and alternate screen) shows it.
++            match self.model_guard_lines() {
++                Some(lines) if lines.len() > 1 => {
++                    let mut flex = FlexRenderable::new();
++                    flex.push(/*flex*/ 0, pane);
++                    flex.push(
++                        /*flex*/ 0,
++                        RenderableItem::Owned(Box::new(
++                            Paragraph::new(lines.into_iter().skip(1).collect::<Vec<_>>())
++                                .wrap(ratatui::widgets::Wrap { trim: false }),
++                        )),
++                    );
++                    RenderableItem::Owned(Box::new(flex))
++                }
++                _ => pane,
++            }
+         }
      }
  
 diff --git a/codex-rs/tui/src/chatwidget/replay.rs b/codex-rs/tui/src/chatwidget/replay.rs
-index 0fb1efd..b2143e7 100644
+index ccb5b775..dc77bea9 100644
 --- a/codex-rs/tui/src/chatwidget/replay.rs
 +++ b/codex-rs/tui/src/chatwidget/replay.rs
-@@ -120,6 +120,9 @@ impl ChatWidget {
+@@ -124,6 +124,9 @@ impl ChatWidget {
              {
                  continue;
              }
@@ -1464,10 +1432,10 @@ index 0fb1efd..b2143e7 100644
                  id: turn_id,
                  items_view: _,
 diff --git a/codex-rs/tui/src/chatwidget/session_flow.rs b/codex-rs/tui/src/chatwidget/session_flow.rs
-index a24e369..451d98e 100644
+index 3a3a68c3..e4005084 100644
 --- a/codex-rs/tui/src/chatwidget/session_flow.rs
 +++ b/codex-rs/tui/src/chatwidget/session_flow.rs
-@@ -123,6 +123,7 @@ impl ChatWidget {
+@@ -180,6 +180,7 @@ impl ChatWidget {
              .set_active_reasoning_effort_baseline(effort.as_ref());
          self.refresh_model_display();
          self.refresh_status_surfaces();
@@ -1476,10 +1444,10 @@ index a24e369..451d98e 100644
              && self.should_prefetch_rate_limits()
              && (self.current_model() == crate::model_catalog::LUNA_RESERVE_MODEL
 diff --git a/codex-rs/tui/src/chatwidget/settings.rs b/codex-rs/tui/src/chatwidget/settings.rs
-index c630d43..c9c3a33 100644
+index a9c2d193..4b6fdee9 100644
 --- a/codex-rs/tui/src/chatwidget/settings.rs
 +++ b/codex-rs/tui/src/chatwidget/settings.rs
-@@ -259,6 +259,9 @@ impl ChatWidget {
+@@ -228,6 +228,9 @@ impl ChatWidget {
          self.status_line_workspace_headline_last_requested_at = None;
          self.status_line_workspace_messages_disabled = false;
          self.clear_thread_usage_state();
@@ -1489,7 +1457,7 @@ index c630d43..c9c3a33 100644
          self.status_account_display = status_account_display;
          self.plan_type = plan_type;
          self.has_chatgpt_account = has_chatgpt_account;
-@@ -409,6 +412,7 @@ impl ChatWidget {
+@@ -359,6 +362,7 @@ impl ChatWidget {
          }
  
          self.apply_thread_settings(notification.thread_settings);
@@ -1498,10 +1466,10 @@ index c630d43..c9c3a33 100644
  
      #[cfg(test)]
 diff --git a/codex-rs/tui/src/chatwidget/slash_dispatch.rs b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-index f67ece5..254a415 100644
+index 4fe2ed05..7e277352 100644
 --- a/codex-rs/tui/src/chatwidget/slash_dispatch.rs
 +++ b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-@@ -271,6 +271,10 @@ impl ChatWidget {
+@@ -296,6 +296,10 @@ impl ChatWidget {
                      self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
                      return;
                  }
@@ -1512,7 +1480,7 @@ index f67ece5..254a415 100644
                  self.clear_token_usage();
                  if !self.bottom_pane.is_task_running() {
                      self.bottom_pane.set_task_running(/*running*/ true);
-@@ -488,6 +492,7 @@ impl ChatWidget {
+@@ -520,6 +524,7 @@ impl ChatWidget {
                          /*refreshing_rate_limits*/ false, /*request_id*/ None,
                      );
                  }
@@ -1521,16 +1489,17 @@ index f67ece5..254a415 100644
              SlashCommand::Cd => {
                  self.dispatch_command_with_args(SlashCommand::Cd, "~".to_string(), Vec::new());
 diff --git a/codex-rs/tui/src/chatwidget/status_surfaces.rs b/codex-rs/tui/src/chatwidget/status_surfaces.rs
-index 1059d78..06bed48 100644
+index 616dd6df..c193b915 100644
 --- a/codex-rs/tui/src/chatwidget/status_surfaces.rs
 +++ b/codex-rs/tui/src/chatwidget/status_surfaces.rs
-@@ -215,10 +215,25 @@ impl ChatWidget {
+@@ -215,11 +215,33 @@ impl ChatWidget {
              }
          }
  
 -        self.set_status_line(status_line_from_segments(
 -            segments,
 -            self.local_settings.tui.status_line_use_colors,
+-            self.thread_id,
 -        ));
 +        let line = if let Some(mut guard_lines) = self.model_guard_lines() {
 +            let mut line = guard_lines.remove(0);
@@ -1541,14 +1510,22 @@ index 1059d78..06bed48 100644
 +                )
 +            });
 +            if let Some(extra) =
-+                status_line_from_segments(segments, self.local_settings.tui.status_line_use_colors)
++                status_line_from_segments(
++                segments,
++                self.local_settings.tui.status_line_use_colors,
++                self.thread_id,
++            )
 +            {
 +                line.spans.push(" · ".dim());
 +                line.spans.extend(extra.spans);
 +            }
 +            Some(line)
 +        } else {
-+            status_line_from_segments(segments, self.local_settings.tui.status_line_use_colors)
++            status_line_from_segments(
++                segments,
++                self.local_settings.tui.status_line_use_colors,
++                self.thread_id,
++            )
 +        };
 +        self.set_status_line(line);
          let hyperlink_url = selections

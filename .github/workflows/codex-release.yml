@@ -1,0 +1,240 @@
+name: Codex release
+
+# Keeps the native Codex package on the latest official release. Every day, or
+# on request, it compares the pinned Codex with upstream's latest stable tag
+# and, when they differ, rebases the source patches with a three-way merge,
+# regenerates the lockfile and protocol schemas, builds the package in the
+# pinned Rust image, runs the Rust and Python checks including the real PTY
+# tests, and publishes the release: a commit on main, a tag and a GitHub
+# release with the archive. Installed machines pick it up through the build's
+# own update check. A patch that no longer merges stops the run and opens an
+# issue naming the conflicting files; a person then runs `rebase.py prepare`,
+# resolves them, runs `rebase.py finish`, pushes main with empty digests, and
+# dispatches this workflow, which builds and publishes from that state.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Official Codex tag (rust-vX.Y.Z); default is the latest stable release"
+        required: false
+      dry_run:
+        description: "Rebase, build and verify on a branch without publishing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: codex-release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      codex: ${{ steps.plan.outputs.codex }}
+      action: ${{ steps.plan.outputs.action }}
+      rust: ${{ steps.plan.outputs.rust }}
+      branch: ${{ steps.plan.outputs.branch }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decide what this run does
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          pinned_json=codex/model-guard/native/release.json
+          pinned=$(python3 -c "import json; print(json.load(open('$pinned_json'))['codex_version'])")
+          digests=$(python3 -c "import json; print(json.load(open('$pinned_json'))['sha256'])")
+          if [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag=$(gh release list -R openai/codex --exclude-pre-releases --limit 30 --json tagName -q '.[].tagName' | grep -E '^rust-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          fi
+          codex="${tag#rust-v}"
+          if [ "$DRY_RUN" = "true" ]; then
+            action=rebase
+          elif [ "$codex" = "$pinned" ] && [ -n "$digests" ]; then
+            action=none
+          elif [ "$codex" = "$pinned" ]; then
+            action=publish
+          else
+            action=rebase
+          fi
+          rust=$(curl -fsSL "https://raw.githubusercontent.com/openai/codex/$tag/codex-rs/rust-toolchain.toml" | python3 -c 'import sys, tomllib; print(tomllib.loads(sys.stdin.read())["toolchain"]["channel"])')
+          {
+            echo "tag=$tag"; echo "codex=$codex"; echo "action=$action"; echo "rust=$rust"
+            echo "branch=codex-release/$codex-$GITHUB_RUN_ID"
+          } >> "$GITHUB_OUTPUT"
+          echo "Pinned $pinned (digests: ${digests:-none}), target $tag, Rust $rust: $action"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.action != 'none'
+    runs-on: ubuntu-24.04
+    container: rust:${{ needs.plan.outputs.rust }}-bookworm
+    outputs:
+      conflicts: ${{ steps.rebase.outputs.conflicts }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq pkg-config libssl-dev libcap-dev python3 curl >/dev/null
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+          apt-get update -qq && apt-get install -y -qq gh >/dev/null
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global user.name "model-guard release"
+          git config --global user.email "model-guard@users.noreply.github.com"
+      - name: Fetch the official standalone package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/official
+          gh release download "${{ needs.plan.outputs.tag }}" -R openai/codex -p codex-package-x86_64-unknown-linux-musl.tar.gz -D /tmp/official
+          tar -xzf /tmp/official/codex-package-x86_64-unknown-linux-musl.tar.gz -C /tmp/official
+      - name: Rebase the patches onto the release
+        id: rebase
+        if: needs.plan.outputs.action == 'rebase'
+        run: |
+          set +e
+          python3 codex/model-guard/native/rebase.py prepare --tag "${{ needs.plan.outputs.tag }}" --work-dir /tmp/rebase | tee /tmp/prepare.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" = 2 ]; then
+            echo "conflicts=$(grep '^CONFLICTS ' /tmp/prepare.log | tr '\n' ';')" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          [ "$status" = 0 ]
+          python3 codex/model-guard/native/rebase.py finish --source /tmp/rebase/source --official-package /tmp/official --target-dir /tmp/target
+          git status --short
+      - name: Build the package
+        run: python3 codex/model-guard/native/build.py --work-dir /tmp/build --official-package /tmp/official --jobs "$(nproc)"
+      - name: Rust checks on the built tree
+        env:
+          CARGO_TARGET_DIR: /tmp/build/target
+          INSTA_WORKSPACE_ROOT: /tmp/build/source/codex-rs
+          RUST_MIN_STACK: "16777216"
+        run: |
+          cd /tmp/build/source/codex-rs
+          cargo clippy --locked -p codex-tui --tests -- -D warnings
+          cargo test --locked -p codex-tui --lib -- native_guard
+          cargo test --locked -p codex-core --test all -- model_routing
+      - name: Push the rebased tree to the release branch
+        run: |
+          git checkout -q -b "${{ needs.plan.outputs.branch }}"
+          git add -A
+          git commit -q -m "Rebase the native Codex package onto ${{ needs.plan.outputs.tag }}" || true
+          git push -q origin "${{ needs.plan.outputs.branch }}"
+      - name: Keep the archive and its record
+        run: |
+          mkdir -p /tmp/out
+          cp /tmp/build/model-guard-codex-linux-x86_64.tar.gz /tmp/build/build-record.json /tmp/out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: model-guard-codex-linux-x86_64
+          path: /tmp/out
+          if-no-files-found: error
+
+  verify:
+    needs: [plan, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.branch }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: model-guard-codex-linux-x86_64
+          path: /tmp/out
+      - name: Unpack the native and the official package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/native /tmp/official
+          tar -xzf /tmp/out/model-guard-codex-linux-x86_64.tar.gz -C /tmp/native
+          gh release download "${{ needs.plan.outputs.tag }}" -R openai/codex -p codex-package-x86_64-unknown-linux-musl.tar.gz -D /tmp/official
+          tar -xzf /tmp/official/codex-package-x86_64-unknown-linux-musl.tar.gz -C /tmp/official
+          /tmp/native/bin/codex --version
+          /tmp/official/bin/codex --version
+      - name: Python checks, fixtures and real PTY sessions
+        working-directory: codex/model-guard
+        run: |
+          python3 -m venv /tmp/venv
+          /tmp/venv/bin/pip install -q --require-hashes -r requirements.lock
+          /tmp/venv/bin/pip install -q --no-deps -e .
+          /tmp/venv/bin/pip install -q --require-hashes -r tests/requirements.lock
+          PYTHONPATH=. MODEL_GUARD_INTEGRATION=1 \
+            MODEL_GUARD_CODEX_BIN=/tmp/native/bin/codex MODEL_GUARD_NATIVE_BIN=/tmp/native/bin/codex \
+            MODEL_GUARD_STOCK_BIN=/tmp/official/bin/codex \
+            /tmp/venv/bin/python -m unittest discover -s tests -v </dev/null
+      - name: Claude-side suite
+        run: tests/run.sh
+
+  publish:
+    needs: [plan, build, verify]
+    if: inputs.dry_run != true
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.branch }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: model-guard-codex-linux-x86_64
+          path: /tmp/out
+      - name: Record the digests and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "model-guard release"
+          git config user.email "model-guard@users.noreply.github.com"
+          python3 codex/model-guard/native/rebase.py record --record /tmp/out/build-record.json
+          version=$(python3 -c 'import json; print(json.load(open("codex/model-guard/native/release.json"))["plugin_version"])')
+          git add -A
+          git commit -q -m "model-guard $version — Codex ${{ needs.plan.outputs.codex }}"
+          git push -q origin "HEAD:main"
+          git tag "v$version"
+          git push -q origin "v$version"
+          sha=$(python3 -c 'import json; print(json.load(open("codex/model-guard/native/release.json"))["sha256"])')
+          gh release create "v$version" /tmp/out/model-guard-codex-linux-x86_64.tar.gz --title "model-guard $version" --notes "Native Codex package on official Codex ${{ needs.plan.outputs.codex }} (SHA-256 \`$sha\`). Installed machines move with \`model-guard-codex update\`; a Model Guard build with auto-update on installs it at its next start. See CHANGELOG.md."
+          git push -q origin --delete "${{ needs.plan.outputs.branch }}"
+
+  report:
+    needs: [plan, build, verify, publish]
+    if: always() && needs.plan.outputs.action != 'none' && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Open or update the issue for this Codex release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          codex="${{ needs.plan.outputs.codex }}"
+          conflicts="${{ needs.build.outputs.conflicts }}"
+          title="Codex $codex: the native package could not be released automatically"
+          {
+            echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            if [ -n "$conflicts" ]; then
+              echo "The source patches no longer merge onto \`${{ needs.plan.outputs.tag }}\`:"
+              echo
+              echo "$conflicts" | tr ';' '\n' | sed 's/^CONFLICTS /- /'
+              echo
+              echo "Runbook: \`python3 codex/model-guard/native/rebase.py prepare --tag ${{ needs.plan.outputs.tag }} --work-dir W\`, resolve and commit each conflicting patch under its own name, \`rebase.py finish --source W/source --official-package <official package> --tag ${{ needs.plan.outputs.tag }}\`, push main with the empty digests, then dispatch **Codex release** with tag \`${{ needs.plan.outputs.tag }}\`."
+            else
+              echo "The build, the checks or the publication failed after the patches merged; see the run log."
+            fi
+          } > body.md
+          number=$(gh issue list --state open --search "\"$title\" in:title" --json number,title -q ".[] | select(.title == \"$title\") | .number" | head -1)
+          if [ -n "$number" ]; then gh issue edit "$number" --body-file body.md; else gh issue create --title "$title" --body-file body.md; fi
