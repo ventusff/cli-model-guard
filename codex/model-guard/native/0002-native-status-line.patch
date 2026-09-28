@@ -12,6 +12,68 @@ index eb5ffa6e..0d35661a 100644
          ServerNotification::ModelVerification(notification) => {
              Some(notification.thread_id.as_str())
          }
+diff --git a/codex-rs/tui/src/app/app_server_events.rs b/codex-rs/tui/src/app/app_server_events.rs
+index cf6e42e3..83cc8bd8 100644
+--- a/codex-rs/tui/src/app/app_server_events.rs
++++ b/codex-rs/tui/src/app/app_server_events.rs
+@@ -327,6 +327,15 @@ impl App {
+                         .is_some_and(AuthMode::has_chatgpt_account),
+                     has_codex_backend_auth,
+                 );
++                if has_codex_backend_auth {
++                    let request_handle = app_server_client.request_handle();
++                    let app_event_tx = self.app_event_tx.clone();
++                    tokio::spawn(async move {
++                        let email =
++                            super::background_requests::fetch_account_email(request_handle).await;
++                        app_event_tx.send(AppEvent::AccountEmailRead { email });
++                    });
++                }
+                 if self.chat_widget.has_chatgpt_account() {
+                     crate::daybreak::prefetch_notice(
+                         &self.config,
+diff --git a/codex-rs/tui/src/app/background_requests.rs b/codex-rs/tui/src/app/background_requests.rs
+index 2219ee0e..b863f6f4 100644
+--- a/codex-rs/tui/src/app/background_requests.rs
++++ b/codex-rs/tui/src/app/background_requests.rs
+@@ -15,7 +15,10 @@ use codex_app_server_protocol::AppsListParams;
+ use codex_app_server_protocol::AppsListResponse;
+ use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditParams;
+ use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
++use codex_app_server_protocol::Account;
++use codex_app_server_protocol::GetAccountParams;
+ use codex_app_server_protocol::GetAccountRateLimitsParams;
++use codex_app_server_protocol::GetAccountResponse;
+ use codex_app_server_protocol::GetAccountTokenUsageParams;
+ use codex_app_server_protocol::GetAccountTokenUsageResponse;
+ use codex_app_server_protocol::MarketplaceAddParams;
+@@ -783,6 +786,26 @@ pub(super) async fn fetch_all_mcp_server_statuses(
+     Ok(statuses)
+ }
+ 
++/// The email of the logged-in ChatGPT account. An account-updated
++/// notification names only the auth mode and plan, so the email that the
++/// footer shows is read back here.
++pub(super) async fn fetch_account_email(request_handle: AppServerRequestHandle) -> Option<String> {
++    let request_id = RequestId::String(format!("account-email-{}", Uuid::new_v4()));
++    let response: GetAccountResponse = request_handle
++        .request_typed(ClientRequest::GetAccount {
++            request_id,
++            params: GetAccountParams {
++                refresh_token: false,
++            },
++        })
++        .await
++        .ok()?;
++    match response.account? {
++        Account::Chatgpt { email, .. } => email,
++        _ => None,
++    }
++}
++
+ pub(super) async fn fetch_account_rate_limits(
+     request_handle: AppServerRequestHandle,
+     origin: RateLimitRefreshOrigin,
 diff --git a/codex-rs/tui/src/app/config_persistence.rs b/codex-rs/tui/src/app/config_persistence.rs
 index d04b7457..d00fa42b 100644
 --- a/codex-rs/tui/src/app/config_persistence.rs
@@ -25,7 +87,7 @@ index d04b7457..d00fa42b 100644
          self.chat_widget.set_reasoning_effort(Some(effort.clone()));
          self.chat_widget
 diff --git a/codex-rs/tui/src/app/event_dispatch.rs b/codex-rs/tui/src/app/event_dispatch.rs
-index 2c9303f5..87001b23 100644
+index 2c9303f5..cd10cb3b 100644
 --- a/codex-rs/tui/src/app/event_dispatch.rs
 +++ b/codex-rs/tui/src/app/event_dispatch.rs
 @@ -999,6 +999,12 @@ impl App {
@@ -41,10 +103,13 @@ index 2c9303f5..87001b23 100644
                      if matches!(&op, AppCommand::UserTurn { .. })
                          && self.chat_widget.defer_pending_turn_for_luna_reserve()
                      {
-@@ -1575,6 +1581,11 @@ impl App {
+@@ -1575,6 +1581,14 @@ impl App {
              AppEvent::RefreshRateLimits { origin } => {
                  self.refresh_rate_limits(app_server, origin);
              }
++            AppEvent::AccountEmailRead { email } => {
++                self.chat_widget.set_status_account_email(email);
++            }
 +            AppEvent::ModelGuardInterrupt { thread_id, turn_id } => {
 +                if let Err(err) = app_server.turn_interrupt(thread_id, turn_id).await {
 +                    tracing::warn!(%thread_id, "Model Guard could not interrupt the stopped thread: {err}");
@@ -53,7 +118,7 @@ index 2c9303f5..87001b23 100644
              AppEvent::ApplyBackendBannerFallback { thread_id } => {
                  if self.active_thread_id == Some(thread_id)
                      && self.chat_widget.thread_id() == Some(thread_id)
-@@ -1923,6 +1934,7 @@ impl App {
+@@ -1923,6 +1937,7 @@ impl App {
                  {
                      return Ok(AppRunControl::Continue);
                  }
@@ -99,13 +164,18 @@ index a3501c3a..533af137 100644
                      .background_voice
                      .as_ref()
 diff --git a/codex-rs/tui/src/app_event.rs b/codex-rs/tui/src/app_event.rs
-index d2b8942f..99505dfa 100644
+index d2b8942f..41a79439 100644
 --- a/codex-rs/tui/src/app_event.rs
 +++ b/codex-rs/tui/src/app_event.rs
-@@ -663,6 +663,12 @@ pub(crate) enum AppEvent {
+@@ -663,6 +663,17 @@ pub(crate) enum AppEvent {
          thread_id: ThreadId,
      },
  
++    /// The logged-in account's email, read after an account update.
++    AccountEmailRead {
++        email: Option<String>,
++    },
++
 +    /// Model Guard stopped a thread no widget is showing; end its turn.
 +    ModelGuardInterrupt {
 +        thread_id: ThreadId,
@@ -940,12 +1010,16 @@ index 00000000..7ff28f5b
 +mod tests;
 diff --git a/codex-rs/tui/src/chatwidget/model_guard_display.rs b/codex-rs/tui/src/chatwidget/model_guard_display.rs
 new file mode 100644
-index 00000000..86eae9a5
+index 00000000..ea836ba5
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/model_guard_display.rs
-@@ -0,0 +1,411 @@
+@@ -0,0 +1,449 @@
 +//! Native footer content and on-demand evidence details.
 +use super::*;
++use crate::bottom_pane::StatusLineItem;
++use crate::chatwidget::rate_limits::limit_label_for_window;
++use crate::chatwidget::status_surfaces::five_hour_status_window;
++use crate::chatwidget::status_surfaces::weekly_status_window;
 +use ratatui::style::Color;
 +
 +impl ChatWidget {
@@ -1083,6 +1157,40 @@ index 00000000..86eae9a5
 +            lines.push(Line::from(format!(" {}", safe_label(&warning))).style(style));
 +        }
 +        Some(lines)
++    }
++
++    /// The band's tail from the first Codex release: context used and the
++    /// account's 5-hour and weekly usage, except items the user's own status
++    /// line already lists.
++    pub(in crate::chatwidget) fn model_guard_usage_parts(&self, listed: &[StatusLineItem]) -> Vec<String> {
++        let mut parts = Vec::new();
++        if !listed
++            .iter()
++            .any(|item| matches!(item, StatusLineItem::ContextUsed | StatusLineItem::ContextRemaining))
++            && let Some(used) = self.status_line_context_used_percent().filter(|used| *used > 0)
++        {
++            parts.push(format!("ctx {used}%"));
++        }
++        if let Some(snapshot) = self.rate_limit_snapshots_by_limit_id.get("codex") {
++            for (item, window) in [
++                (StatusLineItem::FiveHourLimit, five_hour_status_window(snapshot)),
++                (StatusLineItem::WeeklyLimit, weekly_status_window(snapshot)),
++            ] {
++                if listed.contains(&item) {
++                    continue;
++                }
++                if let Some((window, secondary)) = window {
++                    let label = match limit_label_for_window(window.window_minutes, secondary).as_str() {
++                        "weekly" => "7d".to_owned(),
++                        "daily" => "1d".to_owned(),
++                        other => other.to_owned(),
++                    };
++                    let used = window.used_percent.clamp(0.0, 100.0);
++                    parts.push(format!("{label} {used:.0}% used"));
++                }
++            }
++        }
++        parts
 +    }
 +
 +    pub(in crate::chatwidget) fn add_model_guard_details(&mut self) {
@@ -1444,7 +1552,7 @@ index 3a3a68c3..e4005084 100644
              && self.should_prefetch_rate_limits()
              && (self.current_model() == crate::model_catalog::LUNA_RESERVE_MODEL
 diff --git a/codex-rs/tui/src/chatwidget/settings.rs b/codex-rs/tui/src/chatwidget/settings.rs
-index a9c2d193..4b6fdee9 100644
+index a9c2d193..48d0117a 100644
 --- a/codex-rs/tui/src/chatwidget/settings.rs
 +++ b/codex-rs/tui/src/chatwidget/settings.rs
 @@ -228,6 +228,9 @@ impl ChatWidget {
@@ -1457,7 +1565,24 @@ index a9c2d193..4b6fdee9 100644
          self.status_account_display = status_account_display;
          self.plan_type = plan_type;
          self.has_chatgpt_account = has_chatgpt_account;
-@@ -359,6 +362,7 @@ impl ChatWidget {
+@@ -240,6 +243,16 @@ impl ChatWidget {
+         self.refresh_status_surfaces();
+     }
+ 
++    /// The email read back after an account update; a ChatGPT display takes it.
++    pub(crate) fn set_status_account_email(&mut self, email: Option<String>) {
++        if let Some(StatusAccountDisplay::ChatGpt { email: current, .. }) =
++            self.status_account_display.as_mut()
++        {
++            *current = email;
++            self.refresh_status_surfaces();
++        }
++    }
++
+     /// Set the syntax theme override in the widget's config copy.
+     pub(crate) fn set_tui_theme(&mut self, theme: Option<String>) {
+         self.local_settings.tui.theme = theme;
+@@ -359,6 +372,7 @@ impl ChatWidget {
          }
  
          self.apply_thread_settings(notification.thread_settings);
@@ -1489,10 +1614,10 @@ index 4fe2ed05..7e277352 100644
              SlashCommand::Cd => {
                  self.dispatch_command_with_args(SlashCommand::Cd, "~".to_string(), Vec::new());
 diff --git a/codex-rs/tui/src/chatwidget/status_surfaces.rs b/codex-rs/tui/src/chatwidget/status_surfaces.rs
-index 616dd6df..c193b915 100644
+index 616dd6df..480d556f 100644
 --- a/codex-rs/tui/src/chatwidget/status_surfaces.rs
 +++ b/codex-rs/tui/src/chatwidget/status_surfaces.rs
-@@ -215,11 +215,33 @@ impl ChatWidget {
+@@ -215,11 +215,37 @@ impl ChatWidget {
              }
          }
  
@@ -1503,6 +1628,10 @@ index 616dd6df..c193b915 100644
 -        ));
 +        let line = if let Some(mut guard_lines) = self.model_guard_lines() {
 +            let mut line = guard_lines.remove(0);
++            let listed: Vec<StatusLineItem> = segments.iter().map(|(item, _)| *item).collect();
++            for part in self.model_guard_usage_parts(&listed) {
++                line.spans.push(format!(" · {part}").dim());
++            }
 +            segments.retain(|(item, _)| {
 +                !matches!(
 +                    item,
@@ -1531,3 +1660,21 @@ index 616dd6df..c193b915 100644
          let hyperlink_url = selections
              .status_line_items
              .contains(&StatusLineItem::PullRequestNumber)
+@@ -1105,7 +1131,7 @@ impl ChatWidget {
+     }
+ }
+ 
+-fn five_hour_status_window(
++pub(in crate::chatwidget) fn five_hour_status_window(
+     snapshot: &RateLimitSnapshotDisplay,
+ ) -> Option<(&RateLimitWindowDisplay, bool)> {
+     find_primary_codex_window(snapshot, "5h")
+@@ -1114,7 +1140,7 @@ fn five_hour_status_window(
+         .or_else(|| non_weekly_secondary_window_when_primary_is_weekly(snapshot))
+ }
+ 
+-fn weekly_status_window(
++pub(in crate::chatwidget) fn weekly_status_window(
+     snapshot: &RateLimitSnapshotDisplay,
+ ) -> Option<(&RateLimitWindowDisplay, bool)> {
+     find_codex_window(snapshot, "weekly")

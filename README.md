@@ -90,7 +90,7 @@ The last step is **interactive** — arrow keys, two questions, done. It copies 
 
 Run `codex` or `cx` normally, including `resume` and `fork`. Native input handling, scrollback, paste, resizing, profiles and directory selection remain owned by Codex. Background title generation and agent threads cannot replace the visible conversation's model.
 
-The footer says **selected** until live request metadata arrives; it then says **request**, using the model and effort pinned to that request. An attachment never guesses the settings of a request that started before it subscribed. A disclosed different model shows both names in red.
+The footer says **selected** until live request metadata arrives; it then says **request**, using the model and effort pinned to that request, followed by the account (email and plan), the context used and the account's 5-hour and weekly usage (`ctx 18% · 5h 42% used · 7d 21% used`, from Codex's own readings; any of them already in your `tui.status_line` is not repeated). An attachment never guesses the settings of a request that started before it subscribed. A disclosed different model shows both names in red.
 
 **Codex changes models on its own, and the guard refuses.** Codex 0.155 moves a thread to its hidden reserve model (`gpt-reserve`, a GPT-5-class "fast and affordable" fallback) when the account's ordinary usage is exhausted, announces it with one info line, and moves back hours later. Every request in between is made *for* `gpt-reserve` and labeled `gpt-reserve` by the server, so comparing the request with the disclosure sees nothing. Model Guard therefore keeps the model **you selected** — the configured default (`model` in `config.toml` or `-m`) or your last `/model` choice — and holds Codex to it:
 

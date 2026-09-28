@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.11.1 — 2026-09-28
+
+- **Codex: the account email is back on the footer.** Codex sends an account-updated notification at startup that names only the auth mode and plan, and the widget replaced the bootstrap's account display (with the email) by that email-less one, so the footer read `Pro (More)` without the login. The build now reads the account back after every such notification and puts the email into the display, which also restores it in `/status`.
+- **Codex: context and account usage are back on the footer.** The first Codex band (1.4) ended with `ctx 18% | 5h 42% used | 7d 21% used`; the native footer of 1.6 dropped them. The guard's line now ends with the context used and the account's 5-hour and weekly usage, taken from Codex's own readings, and skips any of them that `tui.status_line` already lists.
+
 ## 1.11.0 — 2026-09-28
 
 - **Codex: native build moved to official Codex 0.158.0** (`064c6b8c737f5b41d171fdda80bd9ef10ad06eb3`): the source patches are rebased and the package ships that release's helpers. Two of them needed hand merging (the model client's request metadata and the guard's composer restore, which now uses upstream's own `restore_user_message_to_composer`).

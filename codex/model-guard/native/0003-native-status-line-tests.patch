@@ -1,11 +1,14 @@
 diff --git a/codex-rs/tui/src/chatwidget/model_guard_tests.rs b/codex-rs/tui/src/chatwidget/model_guard_tests.rs
 new file mode 100644
-index 00000000..167f49e3
+index 00000000..7fceb9ee
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/model_guard_tests.rs
-@@ -0,0 +1,880 @@
+@@ -0,0 +1,953 @@
 +use super::*;
++use crate::bottom_pane::StatusLineItem;
 +use crate::chatwidget::tests::Op;
++use codex_app_server_protocol::RateLimitSnapshot;
++use codex_app_server_protocol::RateLimitWindow;
 +use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
 +use crate::model_catalog::ModelCatalog;
 +use codex_app_server_protocol::GetAccountRateLimitsResponse;
@@ -883,6 +886,76 @@ index 00000000..167f49e3
 +    );
 +    chat.model_guard = None;
 +    assert!(chat.model_guard_allows_recovery_to("gpt-6-sol"));
++}
++
++#[tokio::test]
++async fn native_guard_footer_keeps_the_account_email_read_after_an_update() {
++    let (mut chat, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
++    chat.set_model("gpt-6-astra");
++    chat.thread_id = Some(ThreadId::new());
++    chat.model_guard = Some(guard());
++    chat.update_account_state(
++        Some(StatusAccountDisplay::ChatGpt {
++            email: None,
++            plan: Some("Pro".into()),
++        }),
++        /*plan_type*/ None,
++        /*has_chatgpt_account*/ true,
++        /*has_codex_backend_auth*/ true,
++    );
++    assert!(!lines(&chat).contains("@"));
++    chat.set_status_account_email(Some("someone@example.com".into()));
++    assert!(lines(&chat).contains("selected gpt-6-astra · someone@example.com · Pro"));
++    // An API-key display has no email to take.
++    chat.update_account_state(
++        Some(StatusAccountDisplay::ApiKey),
++        /*plan_type*/ None,
++        /*has_chatgpt_account*/ false,
++        /*has_codex_backend_auth*/ false,
++    );
++    chat.set_status_account_email(Some("someone@example.com".into()));
++    assert!(lines(&chat).contains("API key"));
++    assert!(!lines(&chat).contains("@example"));
++}
++
++#[tokio::test]
++async fn native_guard_footer_carries_usage_unless_the_status_line_lists_it() {
++    let (mut chat, _sender, _events, _ops) = make_chatwidget_manual_with_sender().await;
++    chat.set_model("gpt-6-astra");
++    chat.thread_id = Some(ThreadId::new());
++    chat.model_guard = Some(guard());
++    assert!(chat.model_guard_usage_parts(&[]).is_empty());
++    chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
++        primary: Some(RateLimitWindow {
++            used_percent: 42,
++            window_duration_mins: Some(300),
++            resets_at: None,
++        }),
++        secondary: Some(RateLimitWindow {
++            used_percent: 21,
++            window_duration_mins: Some(10080),
++            resets_at: None,
++        }),
++        limit_id: None,
++        limit_name: None,
++        normal_model_slug: None,
++        credits: None,
++        individual_limit: None,
++        spend_control_reached: None,
++        plan_type: None,
++        rate_limit_reached_type: None,
++    }));
++    assert_eq!(
++        chat.model_guard_usage_parts(&[]),
++        vec!["5h 42% used".to_string(), "7d 21% used".to_string()]
++    );
++    assert_eq!(
++        chat.model_guard_usage_parts(&[StatusLineItem::WeeklyLimit]),
++        vec!["5h 42% used".to_string()]
++    );
++    chat.refresh_status_line();
++    let footer = lines(&chat);
++    assert!(footer.contains("selected gpt-6-astra"), "{footer}");
 +}
 diff --git a/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_140.snap b/codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__model_guard__tests__native_guard_width_140.snap
 new file mode 100644

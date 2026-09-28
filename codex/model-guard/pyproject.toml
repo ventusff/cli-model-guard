@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-model-guard"
-version = "1.11.0"
+version = "1.11.1"
 description = "Native Codex routing evidence, reasoning anomalies and account status"
 requires-python = ">=3.12"
 dependencies = ["websockets==17.1"]

@@ -1,7 +1,7 @@
 {
   "name": "model-guard",
   "displayName": "Model Guard",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "description": "🚨 Statusline that catches silent model downgrades in Claude Code — and hooks that undo a safeguard-flag downgrade: stop the turn, switch the session to your recovery model, continue the task. Drives tmux, zellij and kitty. 8 languages, interactive 30-second setup. The same repo carries Model Guard for Codex CLI.",
   "author": {
     "name": "ventusff",
