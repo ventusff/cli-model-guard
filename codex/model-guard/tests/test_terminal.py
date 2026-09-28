@@ -1,4 +1,5 @@
 """Exercise native Codex in its own PTY, using isolated homes and a local API."""
+import contextlib
 import fcntl
 import json
 import os
@@ -77,6 +78,40 @@ class Terminal:
         os.close(self.master)
 
 
+def fixture_daemons(base):
+    """PIDs of the background app-server daemons Codex started under a fixture home."""
+    listing = subprocess.run(["ps", "-eo", "pid=,args="], capture_output=True, text=True, check=False).stdout
+    pids = []
+    for line in listing.splitlines():
+        pid, _, args = line.strip().partition(" ")
+        if args.startswith(str(base) + "/"):
+            pids.append(int(pid))
+    return pids
+
+
+@contextlib.contextmanager
+def fixture_dir(prefix):
+    """A temporary Codex home whose background daemons end with it.
+
+    Codex keeps a daemon per home alive after its sessions exit; the home is
+    deleted with the test, so its daemons would otherwise outlive the run.
+    """
+    with tempfile.TemporaryDirectory(prefix=prefix) as temp:
+        try:
+            yield temp
+        finally:
+            for sig in (signal.SIGTERM, signal.SIGKILL):
+                pids = fixture_daemons(temp)
+                if not pids:
+                    break
+                for pid in pids:
+                    try:
+                        os.kill(pid, sig)
+                    except ProcessLookupError:
+                        pass
+                time.sleep(1)
+
+
 def fixture_home(base, api, alternate_screen="never"):
     """An isolated Codex home on the fixture provider.
 
@@ -103,7 +138,7 @@ def fixture_home(base, api, alternate_screen="never"):
 class NativeTerminalTests(unittest.TestCase):
     def test_native_new_resume_fork_and_paste(self):
         binary = os.environ["MODEL_GUARD_NATIVE_BIN"]
-        with tempfile.TemporaryDirectory(prefix="mg-native-pty-") as temp, ResponsesFixture(None, [516]) as api:
+        with fixture_dir("mg-native-pty-") as temp, ResponsesFixture(None, [516]) as api:
             base = Path(temp)
             env = fixture_home(base, api)
             seed = subprocess.run([binary, "exec", "--skip-git-repo-check", "--json", "--sandbox", "read-only", "Reply OK."], env=env, cwd=base, capture_output=True, text=True, timeout=90, check=True)
@@ -148,17 +183,20 @@ class NativeTerminalTests(unittest.TestCase):
 
     def test_disclosed_route_difference_stops_the_turn(self):
         binary = os.environ["MODEL_GUARD_NATIVE_BIN"]
-        with tempfile.TemporaryDirectory(prefix="mg-native-route-") as temp, ResponsesFixture("gpt-4o") as api:
+        with fixture_dir("mg-native-route-") as temp, ResponsesFixture("gpt-4o") as api:
             base = Path(temp)
             terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "Reply OK."], fixture_home(base, api, alternate_screen="auto"), base)
             try:
                 terminal.wait(lambda: "STOPPED · ROUTE DIFF gpt-6-astra" in terminal.text() and "Model Guard interrupted this turn" in terminal.text())
+                # Codex titles the thread from a hidden gpt-5.6-luna thread; only the
+                # visible thread's own requests count here.
+                visible = lambda: [request for request in api.requests if request["model"] == "gpt-6-astra"]
                 # The stop holds every further turn until a model is selected.
                 terminal.send(b"Second prompt.")
                 terminal.wait(lambda: "Second prompt." in terminal.text())
                 terminal.send(b"\r")
                 terminal.wait(lambda: "Model Guard held this input" in terminal.text())
-                self.assertEqual(len(api.requests), 1)
+                self.assertEqual(len(visible()), 1)
                 self.assertIn("Second prompt.", terminal.text())
                 # Compaction is enqueued around the composer and meets the same hold.
                 terminal.send(b"\x15/compact")
@@ -167,13 +205,13 @@ class NativeTerminalTests(unittest.TestCase):
                     terminal.poll()
                 terminal.send(b"\r")
                 terminal.wait(lambda: terminal.text().count("Model Guard held this input") >= 2)
-                self.assertEqual(len(api.requests), 1)
+                self.assertEqual(len(visible()), 1)
             finally:
                 terminal.close()
 
     def test_body_label_difference_stops_the_turn_and_is_explained_in_status(self):
         binary = os.environ["MODEL_GUARD_NATIVE_BIN"]
-        with tempfile.TemporaryDirectory(prefix="mg-native-label-") as temp, ResponsesFixture(None, label="gpt-4o") as api:
+        with fixture_dir("mg-native-label-") as temp, ResponsesFixture(None, label="gpt-4o") as api:
             base = Path(temp)
             terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "Reply OK."], fixture_home(base, api), base)
             try:
@@ -190,7 +228,7 @@ class NativeTerminalTests(unittest.TestCase):
 
     def test_thread_restored_on_the_reserve_model_stops_before_its_first_turn(self):
         binary = os.environ["MODEL_GUARD_NATIVE_BIN"]
-        with tempfile.TemporaryDirectory(prefix="mg-native-reserve-") as temp, ResponsesFixture(None, label="gpt-reserve") as api:
+        with fixture_dir("mg-native-reserve-") as temp, ResponsesFixture(None, label="gpt-reserve") as api:
             base = Path(temp)
             env = fixture_home(base, api)
             # The thread was last used on Codex's reserve model; the configured model is still gpt-6-astra.
@@ -202,7 +240,7 @@ class NativeTerminalTests(unittest.TestCase):
                 terminal.wait(lambda: "STOPPED · request gpt-reserve · selected gpt-6-astra" in terminal.text() and "Model Guard held this input" in terminal.text())
                 for _ in range(10):
                     terminal.poll()
-                self.assertEqual(len(api.requests), 1)
+                self.assertEqual([request["model"] for request in api.requests], ["gpt-reserve"])
                 self.assertIn("Reply again.", terminal.text())
             finally:
                 terminal.close()
@@ -212,7 +250,7 @@ class NativeTerminalTests(unittest.TestCase):
     def test_native_preserves_stock_scrollback_and_terminal_modes(self):
         modes = []
         for binary in (os.environ["MODEL_GUARD_STOCK_BIN"], os.environ["MODEL_GUARD_NATIVE_BIN"]):
-            with self.subTest(binary=binary), tempfile.TemporaryDirectory(prefix="mg-scroll-") as temp, ResponsesFixture(None, output_text="\n".join(f"History line {index:03d}" for index in range(1, 121))) as api:
+            with self.subTest(binary=binary), fixture_dir("mg-scroll-") as temp, ResponsesFixture(None, output_text="\n".join(f"History line {index:03d}" for index in range(1, 121))) as api:
                 base = Path(temp)
                 terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "Print the history."], fixture_home(base, api), base)
                 try:
