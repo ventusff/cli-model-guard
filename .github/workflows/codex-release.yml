@@ -33,6 +33,10 @@ concurrency:
   group: codex-release
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   plan:
     runs-on: ubuntu-24.04
@@ -212,7 +216,7 @@ jobs:
 
   report:
     needs: [plan, build, verify, publish]
-    if: always() && needs.plan.outputs.action != 'none' && contains(needs.*.result, 'failure')
+    if: always() && needs.plan.outputs.action != 'none' && inputs.dry_run != true && contains(needs.*.result, 'failure')
     runs-on: ubuntu-24.04
     steps:
       - name: Open or update the issue for this Codex release
