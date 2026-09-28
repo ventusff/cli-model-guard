@@ -55,7 +55,7 @@ def docker(image, mounts, workdir, script, jobs):
         command += ["-v", f"{host}:{guest}"]
     owned = " ".join(guest.split(":")[0] for guest in mounts.values() if not guest.endswith(":ro"))
     command += [image, "bash", "-c",
-                f"{APT}; git config --global --add safe.directory '*'; set -e\n{script.strip()}\nchown -R {os.getuid()}:{os.getgid()} {owned}"]
+                f"trap 'chown -R {os.getuid()}:{os.getgid()} {owned}' EXIT; {APT}; git config --global --add safe.directory '*'; set -e\n{script.strip()}"]
     run(command)
 
 
