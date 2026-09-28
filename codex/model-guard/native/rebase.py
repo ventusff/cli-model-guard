@@ -39,7 +39,7 @@ HELPERS = ("bin/codex-code-mode-host", "codex-resources/bwrap", "codex-resources
            "codex-path/rg", "codex-resources/voice/manifest.json")
 # Files that state the tracked Codex version, its commit or the Rust image in prose.
 VERSIONED_DOCS = ("README.md", "README.zh-CN.md", "AGENTS.md", "codex/model-guard/native/README.md",
-                  "codex/model-guard/skills/codex-model-guard/SKILL.md", ".github/workflows/codex-release.yml")
+                  "codex/model-guard/skills/codex-model-guard/SKILL.md", ".github/workflows/codex-upstream.yml")
 VERSION_FILES = {
     ".claude-plugin/plugin.json": ('"version": "{old}"', '"version": "{new}"'),
     "scripts/lib.sh": ('MG_VERSION="{old}"', 'MG_VERSION="{new}"'),

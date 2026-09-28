@@ -65,40 +65,39 @@ versions, sources and checksums are unchanged. Cargo builds use `--locked`.
 
 ## Release
 
-The **Codex release** workflow (`.github/workflows/codex-release.yml`) runs
-daily and on request. It compares the pinned Codex with upstream's latest
-stable tag and, when they differ, runs the loop below inside the pinned Rust
-image; a person only steps in when a patch no longer merges.
+A new official Codex release is one command on a machine with Docker and the
+GitHub CLI logged in:
 
-1. `rebase.py prepare --tag rust-vX.Y.Z --work-dir W` fetches the tag and
-   applies the four source patches (0001, 0002, 0003, 0006) with a three-way
-   merge, one commit each. A conflict leaves markers in `W/source` and exits 2;
-   the workflow then opens an issue naming the files.
-2. `rebase.py finish --source W/source --official-package <official package>`
-   applies the packaging patch without its lockfile, lets Cargo rewrite the
-   lockfile for the release's workspace versions, regenerates the protocol
-   schemas with the upstream schema writer, writes the six patches back,
-   pins the tag, commit, Rust version, patch and helper digests in
-   `release.json`, bumps the plugin version everywhere and rewrites the
-   version strings in the documentation, with a changelog entry.
-3. `build.py` builds the package; clippy, the guard's Rust tests and the core
-   routing test run on the built tree; the Python unit, fixture and PTY tests
-   run against the archive on a Python 3.12 runner.
-4. `rebase.py record` copies the archive digests into `release.json`; the
-   result is committed to `main`, tagged `v<plugin version>` and published as
-   a GitHub release with the archive attached.
+```sh
+python3 codex/model-guard/native/release.py            # latest stable upstream release
+python3 codex/model-guard/native/release.py --dry-run  # build and verify, restore the checkout
+```
+
+It fetches the tag and merges the four source patches with a three-way merge
+(`rebase.py prepare`), then inside the pinned Rust image regenerates the
+lockfile and the protocol schemas, writes the six patches back, pins the tag,
+commit, Rust version, patch and helper digests in `release.json`, bumps the
+plugin version everywhere and rewrites the version strings in the
+documentation (`rebase.py finish`), builds the package (`build.py`), and runs
+clippy, the guard's Rust tests and the core routing test. On the host it runs
+the Python unit, fixture and PTY tests against the archive and the Claude
+suite, records the archive digests (`rebase.py record`), commits to `main`,
+tags `v<plugin version>` and publishes the GitHub release with the archive.
+
+A patch that no longer merges stops the command with the conflicting files
+listed. Resolve them in the work tree (`~/.cache/model-guard/release-<version>/source`),
+commit each resolved patch there under its own name, and run again with
+`--resume`, which skips the fetch and merge. `rebase.py patches --source <tree>`
+alone rewrites the six patches from such a tree.
 
 Installed machines then move by themselves: the build's startup update check
 sees the new plugin version and runs `model-guard-codex update` detached
 (`update.log` under the installation root), or `model-guard-codex update`
 brings a machine over at once.
 
-After resolving a conflict by hand, commit each resolved patch under its own
-name in `W/source`, run `finish` (it needs `cargo`; the pinned image is the
-simplest place), push `main` with the empty digests, and dispatch the
-workflow with that tag: it skips the rebase, builds, verifies and publishes.
-The workflow's `dry_run` input rebases, builds and verifies on a branch
-without publishing.
+The `Codex upstream watch` workflow only notices a new stable release daily and
+opens an issue saying whether the patches still merge; nothing is compiled on
+GitHub.
 
 ## Validate
 
