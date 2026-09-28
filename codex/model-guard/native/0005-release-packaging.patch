@@ -1,5 +1,5 @@
 diff --git a/codex-rs/Cargo.lock b/codex-rs/Cargo.lock
-index 13f4c2a6..93b10786 100644
+index 13f4c2a..93b1078 100644
 --- a/codex-rs/Cargo.lock
 +++ b/codex-rs/Cargo.lock
 @@ -268,7 +268,7 @@ checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
@@ -1405,7 +1405,7 @@ index 13f4c2a6..93b10786 100644
   "anyhow",
   "assert_cmd",
 diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
-index 4d7984d5..d686f2db 100644
+index 4d7984d..d686f2d 100644
 --- a/codex-rs/cli/src/main.rs
 +++ b/codex-rs/cli/src/main.rs
 @@ -113,7 +113,7 @@ use codex_terminal_detection::TerminalName;

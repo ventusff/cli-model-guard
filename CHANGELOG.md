@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.12.0 — 2026-09-28
+
+- **Codex: native build moved to official Codex 0.158.0** (`064c6b8c737f5b41d171fdda80bd9ef10ad06eb3`): the source patches are rebased and the package ships that release's helpers.
+
 ## 1.11.0 — 2026-09-28
 
 - **Codex: native build moved to official Codex 0.158.0** (`064c6b8c737f5b41d171fdda80bd9ef10ad06eb3`): the source patches are rebased and the package ships that release's helpers. Two of them needed hand merging (the model client's request metadata and the guard's composer restore, which now uses upstream's own `restore_user_message_to_composer`).

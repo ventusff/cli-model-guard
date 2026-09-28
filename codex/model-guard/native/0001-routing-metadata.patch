@@ -1,5 +1,5 @@
 diff --git a/codex-rs/app-server-protocol/src/protocol/common.rs b/codex-rs/app-server-protocol/src/protocol/common.rs
-index c37c4956..6b449e4f 100644
+index c37c495..6b449e4 100644
 --- a/codex-rs/app-server-protocol/src/protocol/common.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/common.rs
 @@ -1993,6 +1993,8 @@ server_notification_definitions! {
@@ -12,7 +12,7 @@ index c37c4956..6b449e4f 100644
      AuthRecoveryStarted => "modelProvider/authRecoveryStarted" (v2::AuthRecoveryNotification),
      AuthRecoveryCompleted => "modelProvider/authRecoveryCompleted" (v2::AuthRecoveryNotification),
 diff --git a/codex-rs/app-server-protocol/src/protocol/v2/model.rs b/codex-rs/app-server-protocol/src/protocol/v2/model.rs
-index b6311ffd..d2741e67 100644
+index b6311ff..d2741e6 100644
 --- a/codex-rs/app-server-protocol/src/protocol/v2/model.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/v2/model.rs
 @@ -193,6 +193,22 @@ pub struct ModelReroutedNotification {
@@ -39,7 +39,7 @@ index b6311ffd..d2741e67 100644
  #[serde(rename_all = "camelCase")]
  #[ts(export_to = "v2/")]
 diff --git a/codex-rs/app-server/src/bespoke_event_handling.rs b/codex-rs/app-server/src/bespoke_event_handling.rs
-index c5a87f6e..4899d5fb 100644
+index c5a87f6..4899d5f 100644
 --- a/codex-rs/app-server/src/bespoke_event_handling.rs
 +++ b/codex-rs/app-server/src/bespoke_event_handling.rs
 @@ -408,6 +408,22 @@ pub(crate) async fn apply_bespoke_event_handling(
@@ -66,7 +66,7 @@ index c5a87f6e..4899d5fb 100644
              let notification = ModelVerificationNotification {
                  thread_id: conversation_id.to_string(),
 diff --git a/codex-rs/app-server/src/notification_media.rs b/codex-rs/app-server/src/notification_media.rs
-index a3bb780b..78f2cf15 100644
+index a3bb780..78f2cf1 100644
 --- a/codex-rs/app-server/src/notification_media.rs
 +++ b/codex-rs/app-server/src/notification_media.rs
 @@ -110,6 +110,7 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
@@ -78,7 +78,7 @@ index a3bb780b..78f2cf15 100644
          | ServerNotification::AuthRecoveryStarted(_)
          | ServerNotification::AuthRecoveryCompleted(_)
 diff --git a/codex-rs/codex-api/src/common.rs b/codex-rs/codex-api/src/common.rs
-index 935ece02..685e4535 100644
+index 935ece0..685e453 100644
 --- a/codex-rs/codex-api/src/common.rs
 +++ b/codex-rs/codex-api/src/common.rs
 @@ -88,6 +88,10 @@ pub enum ResponseEvent {
@@ -93,7 +93,7 @@ index 935ece02..685e4535 100644
      ModelVerifications(Vec<ModelVerification>),
      /// Emitted when the server includes moderation metadata for first-party turn presentation.
 diff --git a/codex-rs/codex-api/src/endpoint/responses_websocket.rs b/codex-rs/codex-api/src/endpoint/responses_websocket.rs
-index 1c7da2e9..d47b7288 100644
+index 1c7da2e..d47b728 100644
 --- a/codex-rs/codex-api/src/endpoint/responses_websocket.rs
 +++ b/codex-rs/codex-api/src/endpoint/responses_websocket.rs
 @@ -691,6 +691,7 @@ async fn run_websocket_response_stream(
@@ -120,7 +120,7 @@ index 1c7da2e9..d47b7288 100644
                      && tx_event
                          .send(Ok(ResponseEvent::ModelVerifications(verifications)))
 diff --git a/codex-rs/codex-api/src/sse/responses.rs b/codex-rs/codex-api/src/sse/responses.rs
-index 24a81bcc..dcf0cc5f 100644
+index 24a81bc..dcf0cc5 100644
 --- a/codex-rs/codex-api/src/sse/responses.rs
 +++ b/codex-rs/codex-api/src/sse/responses.rs
 @@ -219,6 +219,16 @@ impl ResponsesStreamEvent {
@@ -200,7 +200,7 @@ index 24a81bcc..dcf0cc5f 100644
                  response_id,
                  token_usage: None,
 diff --git a/codex-rs/core/src/client.rs b/codex-rs/core/src/client.rs
-index f8faf454..b8dae9d5 100644
+index f8faf45..b8dae9d 100644
 --- a/codex-rs/core/src/client.rs
 +++ b/codex-rs/core/src/client.rs
 @@ -127,6 +127,8 @@ use crate::attestation::X_OAI_ATTESTATION_HEADER;
@@ -304,7 +304,7 @@ index f8faf454..b8dae9d5 100644
              consumer_dropped: consumer_dropped_for_stream,
          },
 diff --git a/codex-rs/core/src/client_common.rs b/codex-rs/core/src/client_common.rs
-index 96cd7eab..a6243bdf 100644
+index 96cd7ea..a6243bd 100644
 --- a/codex-rs/core/src/client_common.rs
 +++ b/codex-rs/core/src/client_common.rs
 @@ -116,6 +116,7 @@ fn normalize_image_detail(detail: &mut Option<ImageDetail>, model_info: &ModelIn
@@ -317,7 +317,7 @@ index 96cd7eab..a6243bdf 100644
      /// provider stream reached its own terminal event.
 diff --git a/codex-rs/core/src/client_routing.rs b/codex-rs/core/src/client_routing.rs
 new file mode 100644
-index 00000000..c4891983
+index 0000000..c489198
 --- /dev/null
 +++ b/codex-rs/core/src/client_routing.rs
 @@ -0,0 +1,38 @@
@@ -360,7 +360,7 @@ index 00000000..c4891983
 +    }
 +}
 diff --git a/codex-rs/core/src/compact_remote_v2.rs b/codex-rs/core/src/compact_remote_v2.rs
-index ff3b8057..983ddec6 100644
+index ff3b805..983ddec 100644
 --- a/codex-rs/core/src/compact_remote_v2.rs
 +++ b/codex-rs/core/src/compact_remote_v2.rs
 @@ -844,6 +844,7 @@ mod tests {
@@ -372,7 +372,7 @@ index ff3b8057..983ddec6 100644
              consumer_dropped: CancellationToken::new(),
          }
 diff --git a/codex-rs/core/src/session/session.rs b/codex-rs/core/src/session/session.rs
-index b6f39ac3..7678fdc7 100644
+index b6f39ac..7678fdc 100644
 --- a/codex-rs/core/src/session/session.rs
 +++ b/codex-rs/core/src/session/session.rs
 @@ -1748,6 +1748,7 @@ impl Session {
@@ -384,7 +384,7 @@ index b6f39ac3..7678fdc7 100644
                  executed_tool_calls: executed_tool_calls.clone(),
                  code_mode_service: crate::tools::code_mode::CodeModeService::new(
 diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
-index 4e868378..b379f0b4 100644
+index 4e86837..b379f0b 100644
 --- a/codex-rs/core/src/session/turn.rs
 +++ b/codex-rs/core/src/session/turn.rs
 @@ -2061,6 +2061,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<RealtimeEventTex
@@ -432,7 +432,7 @@ index 4e868378..b379f0b4 100644
                  if !turn_context
                      .model_verification_emitted
 diff --git a/codex-rs/core/src/turn_timing.rs b/codex-rs/core/src/turn_timing.rs
-index bc90f81a..a083fe2f 100644
+index bc90f81..a083fe2 100644
 --- a/codex-rs/core/src/turn_timing.rs
 +++ b/codex-rs/core/src/turn_timing.rs
 @@ -387,6 +387,7 @@ fn response_event_records_turn_ttft(event: &ResponseEvent) -> bool {
@@ -444,7 +444,7 @@ index bc90f81a..a083fe2f 100644
          | ResponseEvent::TurnModerationMetadata(_)
          | ResponseEvent::SafetyBuffering(_)
 diff --git a/codex-rs/core/tests/suite/mod.rs b/codex-rs/core/tests/suite/mod.rs
-index 54e98b75..807b9d38 100644
+index 54e98b7..807b9d3 100644
 --- a/codex-rs/core/tests/suite/mod.rs
 +++ b/codex-rs/core/tests/suite/mod.rs
 @@ -135,6 +135,7 @@ mod model_overrides;
@@ -457,7 +457,7 @@ index 54e98b75..807b9d38 100644
  mod model_visible_layout;
 diff --git a/codex-rs/core/tests/suite/model_routing.rs b/codex-rs/core/tests/suite/model_routing.rs
 new file mode 100644
-index 00000000..409284bf
+index 0000000..409284b
 --- /dev/null
 +++ b/codex-rs/core/tests/suite/model_routing.rs
 @@ -0,0 +1,93 @@
@@ -555,7 +555,7 @@ index 00000000..409284bf
 +    Ok(())
 +}
 diff --git a/codex-rs/otel/src/events/session_telemetry.rs b/codex-rs/otel/src/events/session_telemetry.rs
-index 33f2c820..2e0861cb 100644
+index 33f2c82..2e0861c 100644
 --- a/codex-rs/otel/src/events/session_telemetry.rs
 +++ b/codex-rs/otel/src/events/session_telemetry.rs
 @@ -1378,6 +1378,7 @@ impl SessionTelemetry {
@@ -567,7 +567,7 @@ index 33f2c820..2e0861cb 100644
              ResponseEvent::TurnModerationMetadata(_) => "turn_moderation_metadata".into(),
              ResponseEvent::SafetyBuffering(_) => "safety_buffering".into(),
 diff --git a/codex-rs/protocol/src/protocol.rs b/codex-rs/protocol/src/protocol.rs
-index da9ba1ad..04157900 100644
+index da9ba1a..0415790 100644
 --- a/codex-rs/protocol/src/protocol.rs
 +++ b/codex-rs/protocol/src/protocol.rs
 @@ -1387,6 +1387,9 @@ pub enum EventMsg {
@@ -605,7 +605,7 @@ index da9ba1ad..04157900 100644
  #[serde(rename_all = "snake_case")]
  #[ts(rename_all = "snake_case")]
 diff --git a/codex-rs/rollout-trace/src/protocol_event.rs b/codex-rs/rollout-trace/src/protocol_event.rs
-index dadc4bb0..662c32f1 100644
+index dadc4bb..662c32f 100644
 --- a/codex-rs/rollout-trace/src/protocol_event.rs
 +++ b/codex-rs/rollout-trace/src/protocol_event.rs
 @@ -372,6 +372,7 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
@@ -625,7 +625,7 @@ index dadc4bb0..662c32f1 100644
          | EventMsg::TurnModerationMetadata(_)
          | EventMsg::ContextCompacted(_)
 diff --git a/codex-rs/rollout/src/policy.rs b/codex-rs/rollout/src/policy.rs
-index c82b5ce9..7df5354f 100644
+index c82b5ce..7df5354 100644
 --- a/codex-rs/rollout/src/policy.rs
 +++ b/codex-rs/rollout/src/policy.rs
 @@ -161,6 +161,7 @@ pub fn should_persist_event_msg(ev: &EventMsg, history_mode: ThreadHistoryMode)

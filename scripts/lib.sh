@@ -39,7 +39,7 @@
 # The installed copy under ~/.claude/model-guard/ is what Claude Code runs for
 # the statusline; check-install.sh refreshes it when MG_VERSION moves.
 
-MG_VERSION="1.11.0"
+MG_VERSION="1.12.0"
 MG_CONF="${MODEL_GUARD_CONF:-$HOME/.claude/model-guard.conf}"
 MG_SETTINGS="${MODEL_GUARD_SETTINGS:-$HOME/.claude/settings.json}"
 MG_STATE_DIR="${MODEL_GUARD_STATE_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/model-guard}"

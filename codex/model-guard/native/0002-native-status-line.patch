@@ -1,5 +1,5 @@
 diff --git a/codex-rs/tui/src/app/app_server_event_targets.rs b/codex-rs/tui/src/app/app_server_event_targets.rs
-index eb5ffa6e..0d35661a 100644
+index eb5ffa6..0d35661 100644
 --- a/codex-rs/tui/src/app/app_server_event_targets.rs
 +++ b/codex-rs/tui/src/app/app_server_event_targets.rs
 @@ -136,6 +136,9 @@ pub(super) fn server_notification_thread_target(
@@ -13,7 +13,7 @@ index eb5ffa6e..0d35661a 100644
              Some(notification.thread_id.as_str())
          }
 diff --git a/codex-rs/tui/src/app/config_persistence.rs b/codex-rs/tui/src/app/config_persistence.rs
-index d04b7457..d00fa42b 100644
+index d04b745..d00fa42 100644
 --- a/codex-rs/tui/src/app/config_persistence.rs
 +++ b/codex-rs/tui/src/app/config_persistence.rs
 @@ -1008,6 +1008,7 @@ impl App {
@@ -25,7 +25,7 @@ index d04b7457..d00fa42b 100644
          self.chat_widget.set_reasoning_effort(Some(effort.clone()));
          self.chat_widget
 diff --git a/codex-rs/tui/src/app/event_dispatch.rs b/codex-rs/tui/src/app/event_dispatch.rs
-index 2c9303f5..87001b23 100644
+index 2c9303f..87001b2 100644
 --- a/codex-rs/tui/src/app/event_dispatch.rs
 +++ b/codex-rs/tui/src/app/event_dispatch.rs
 @@ -999,6 +999,12 @@ impl App {
@@ -62,7 +62,7 @@ index 2c9303f5..87001b23 100644
                      || self.chat_widget.current_collaboration_mode().model() != model;
                  if model_changed {
 diff --git a/codex-rs/tui/src/app/session_lifecycle.rs b/codex-rs/tui/src/app/session_lifecycle.rs
-index 0b0089f0..8d9f839b 100644
+index 0b0089f..8d9f839 100644
 --- a/codex-rs/tui/src/app/session_lifecycle.rs
 +++ b/codex-rs/tui/src/app/session_lifecycle.rs
 @@ -519,6 +519,7 @@ impl App {
@@ -74,7 +74,7 @@ index 0b0089f0..8d9f839b 100644
              chat_widget.set_collab_agent_metadata(
                  thread_id,
 diff --git a/codex-rs/tui/src/app/thread_routing.rs b/codex-rs/tui/src/app/thread_routing.rs
-index a3501c3a..533af137 100644
+index a3501c3..533af13 100644
 --- a/codex-rs/tui/src/app/thread_routing.rs
 +++ b/codex-rs/tui/src/app/thread_routing.rs
 @@ -6,6 +6,7 @@
@@ -99,7 +99,7 @@ index a3501c3a..533af137 100644
                      .background_voice
                      .as_ref()
 diff --git a/codex-rs/tui/src/app_event.rs b/codex-rs/tui/src/app_event.rs
-index d2b8942f..99505dfa 100644
+index d2b8942..99505df 100644
 --- a/codex-rs/tui/src/app_event.rs
 +++ b/codex-rs/tui/src/app_event.rs
 @@ -663,6 +663,12 @@ pub(crate) enum AppEvent {
@@ -116,7 +116,7 @@ index d2b8942f..99505dfa 100644
      OpenThreadGoalMenu {
          thread_id: ThreadId,
 diff --git a/codex-rs/tui/src/chatwidget.rs b/codex-rs/tui/src/chatwidget.rs
-index 5ca41829..094ff8a3 100644
+index 5ca4182..094ff8a 100644
 --- a/codex-rs/tui/src/chatwidget.rs
 +++ b/codex-rs/tui/src/chatwidget.rs
 @@ -387,6 +387,7 @@ mod status_controls;
@@ -147,7 +147,7 @@ index 5ca41829..094ff8a3 100644
              && matches!(
                  &op,
 diff --git a/codex-rs/tui/src/chatwidget/backend_banners.rs b/codex-rs/tui/src/chatwidget/backend_banners.rs
-index 757d2f9f..dddbcc27 100644
+index 757d2f9..dddbcc2 100644
 --- a/codex-rs/tui/src/chatwidget/backend_banners.rs
 +++ b/codex-rs/tui/src/chatwidget/backend_banners.rs
 @@ -61,7 +61,10 @@ pub(super) struct BackendBannerState {
@@ -216,7 +216,7 @@ index 757d2f9f..dddbcc27 100644
          self.bottom_pane
              .dismiss_view_by_id(LUNA_RESERVE_RECOVERY_VIEW_ID);
 diff --git a/codex-rs/tui/src/chatwidget/constructor.rs b/codex-rs/tui/src/chatwidget/constructor.rs
-index fb4575ab..11ae3221 100644
+index fb4575a..11ae322 100644
 --- a/codex-rs/tui/src/chatwidget/constructor.rs
 +++ b/codex-rs/tui/src/chatwidget/constructor.rs
 @@ -96,6 +96,7 @@ impl ChatWidget {
@@ -236,7 +236,7 @@ index fb4575ab..11ae3221 100644
              current_goal_status: None,
              external_editor_state: ExternalEditorState::Closed,
 diff --git a/codex-rs/tui/src/chatwidget/input_submission.rs b/codex-rs/tui/src/chatwidget/input_submission.rs
-index a37e938c..129e3e6b 100644
+index a37e938..129e3e6 100644
 --- a/codex-rs/tui/src/chatwidget/input_submission.rs
 +++ b/codex-rs/tui/src/chatwidget/input_submission.rs
 @@ -197,6 +197,14 @@ impl ChatWidget {
@@ -256,7 +256,7 @@ index a37e938c..129e3e6b 100644
          {
 diff --git a/codex-rs/tui/src/chatwidget/model_guard.rs b/codex-rs/tui/src/chatwidget/model_guard.rs
 new file mode 100644
-index 00000000..7ff28f5b
+index 0000000..7ff28f5
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/model_guard.rs
 @@ -0,0 +1,678 @@
@@ -940,7 +940,7 @@ index 00000000..7ff28f5b
 +mod tests;
 diff --git a/codex-rs/tui/src/chatwidget/model_guard_display.rs b/codex-rs/tui/src/chatwidget/model_guard_display.rs
 new file mode 100644
-index 00000000..86eae9a5
+index 0000000..86eae9a
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/model_guard_display.rs
 @@ -0,0 +1,411 @@
@@ -1356,7 +1356,7 @@ index 00000000..86eae9a5
 +        .collect()
 +}
 diff --git a/codex-rs/tui/src/chatwidget/protocol.rs b/codex-rs/tui/src/chatwidget/protocol.rs
-index ba0d2e40..b1c615f6 100644
+index ba0d2e4..b1c615f 100644
 --- a/codex-rs/tui/src/chatwidget/protocol.rs
 +++ b/codex-rs/tui/src/chatwidget/protocol.rs
 @@ -15,6 +15,8 @@ impl ChatWidget {
@@ -1378,7 +1378,7 @@ index ba0d2e40..b1c615f6 100644
                  self.on_app_server_model_verification(&notification.verifications)
              }
 diff --git a/codex-rs/tui/src/chatwidget/rendering.rs b/codex-rs/tui/src/chatwidget/rendering.rs
-index 36c87335..144ad350 100644
+index 36c8733..144ad35 100644
 --- a/codex-rs/tui/src/chatwidget/rendering.rs
 +++ b/codex-rs/tui/src/chatwidget/rendering.rs
 @@ -244,7 +244,8 @@ impl ChatWidget {
@@ -1418,7 +1418,7 @@ index 36c87335..144ad350 100644
      }
  
 diff --git a/codex-rs/tui/src/chatwidget/replay.rs b/codex-rs/tui/src/chatwidget/replay.rs
-index ccb5b775..dc77bea9 100644
+index ccb5b77..dc77bea 100644
 --- a/codex-rs/tui/src/chatwidget/replay.rs
 +++ b/codex-rs/tui/src/chatwidget/replay.rs
 @@ -124,6 +124,9 @@ impl ChatWidget {
@@ -1432,7 +1432,7 @@ index ccb5b775..dc77bea9 100644
                  id: turn_id,
                  items_view: _,
 diff --git a/codex-rs/tui/src/chatwidget/session_flow.rs b/codex-rs/tui/src/chatwidget/session_flow.rs
-index 3a3a68c3..e4005084 100644
+index 3a3a68c..e400508 100644
 --- a/codex-rs/tui/src/chatwidget/session_flow.rs
 +++ b/codex-rs/tui/src/chatwidget/session_flow.rs
 @@ -180,6 +180,7 @@ impl ChatWidget {
@@ -1444,7 +1444,7 @@ index 3a3a68c3..e4005084 100644
              && self.should_prefetch_rate_limits()
              && (self.current_model() == crate::model_catalog::LUNA_RESERVE_MODEL
 diff --git a/codex-rs/tui/src/chatwidget/settings.rs b/codex-rs/tui/src/chatwidget/settings.rs
-index a9c2d193..4b6fdee9 100644
+index a9c2d19..4b6fdee 100644
 --- a/codex-rs/tui/src/chatwidget/settings.rs
 +++ b/codex-rs/tui/src/chatwidget/settings.rs
 @@ -228,6 +228,9 @@ impl ChatWidget {
@@ -1466,7 +1466,7 @@ index a9c2d193..4b6fdee9 100644
  
      #[cfg(test)]
 diff --git a/codex-rs/tui/src/chatwidget/slash_dispatch.rs b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-index 4fe2ed05..7e277352 100644
+index 4fe2ed0..7e27735 100644
 --- a/codex-rs/tui/src/chatwidget/slash_dispatch.rs
 +++ b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
 @@ -296,6 +296,10 @@ impl ChatWidget {
@@ -1489,7 +1489,7 @@ index 4fe2ed05..7e277352 100644
              SlashCommand::Cd => {
                  self.dispatch_command_with_args(SlashCommand::Cd, "~".to_string(), Vec::new());
 diff --git a/codex-rs/tui/src/chatwidget/status_surfaces.rs b/codex-rs/tui/src/chatwidget/status_surfaces.rs
-index 616dd6df..c193b915 100644
+index 616dd6d..c193b91 100644
 --- a/codex-rs/tui/src/chatwidget/status_surfaces.rs
 +++ b/codex-rs/tui/src/chatwidget/status_surfaces.rs
 @@ -215,11 +215,33 @@ impl ChatWidget {
