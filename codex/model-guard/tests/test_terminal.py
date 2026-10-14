@@ -112,6 +112,16 @@ def fixture_dir(prefix):
                 time.sleep(1)
 
 
+def thread_requests(api):
+    """The visible thread's requests, the ones sharing the first request's
+    prompt cache key. Codex titles a thread from a hidden thread of its own,
+    on the selected model when the provider offers no title model."""
+    if not api.requests:
+        return []
+    key = api.requests[0].get("prompt_cache_key")
+    return [request for request in api.requests if request.get("prompt_cache_key") == key]
+
+
 def fixture_home(base, api, alternate_screen="never"):
     """An isolated Codex home on the fixture provider.
 
@@ -188,9 +198,7 @@ class NativeTerminalTests(unittest.TestCase):
             terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "Reply OK."], fixture_home(base, api, alternate_screen="auto"), base)
             try:
                 terminal.wait(lambda: "STOPPED · ROUTE DIFF gpt-6-astra" in terminal.text() and "Model Guard interrupted this turn" in terminal.text())
-                # Codex titles the thread from a hidden gpt-5.6-luna thread; only the
-                # visible thread's own requests count here.
-                visible = lambda: [request for request in api.requests if request["model"] == "gpt-6-astra"]
+                visible = lambda: thread_requests(api)
                 # The stop holds every further turn until a model is selected.
                 terminal.send(b"Second prompt.")
                 terminal.wait(lambda: "Second prompt." in terminal.text())

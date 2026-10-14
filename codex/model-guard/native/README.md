@@ -86,7 +86,9 @@ fails only on a diagnostic the patches add. On the host it runs the Python
 unit, fixture and PTY tests against the archive and the Claude suite, records
 the archive digests (`rebase.py record`), commits to `main`, tags
 `v<plugin version>` and publishes the GitHub release with the archive. A run
-that fails restores the checkout, as a dry run does.
+that fails restores the checkout, as a dry run does, and a rerun whose patches,
+upstream commit, Rust version and plugin version match the last build that
+passed clippy and the Rust tests reuses that build.
 
 A patch that no longer merges stops the command with the conflicting files
 listed. Resolve them in the work tree (`~/.cache/model-guard/release-<version>/source`),

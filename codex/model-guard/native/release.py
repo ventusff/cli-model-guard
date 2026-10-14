@@ -128,6 +128,31 @@ def restore_checkout():
     run(["git", "clean", "-fdq", "--", "codex/model-guard/native"], cwd=REPO)
 
 
+def verify_build(image, mounts, upstream, rust, jobs):
+    """Build the package, then hold it to clippy against the official source
+    and to the guard's Rust cases and the core routing test."""
+    docker(image, mounts, "/work/source", f"""
+python3 /repo/codex/model-guard/native/build.py --work-dir /work/build --official-package /official --jobs {jobs}
+lockfile=$(sha256sum /repo/codex/model-guard/native/0005-release-packaging.patch | cut -c1-16)
+baseline=/work/clippy-baseline-{upstream}-rust{rust}-$lockfile.json
+if [ ! -s "$baseline" ]; then
+  mkdir -p /work/clippy-baseline/source
+  git -C /work/build/source archive HEAD | tar -xf - -C /work/clippy-baseline/source
+  (cd /work/clippy-baseline/source && git apply --include=codex-rs/Cargo.lock /repo/codex/model-guard/native/0005-release-packaging.patch)
+  (cd /work/clippy-baseline/source/codex-rs && CARGO_TARGET_DIR=/work/clippy-baseline/target cargo clippy --locked -p codex-tui --tests -j {jobs} --message-format=json > /work/clippy-baseline/clippy.json || true)
+  python3 /repo/codex/model-guard/native/clippy_gate.py --verify /work/clippy-baseline/clippy.json
+  mv /work/clippy-baseline/clippy.json "$baseline"
+  rm -rf /work/clippy-baseline
+fi
+cd /work/build/source/codex-rs
+export CARGO_TARGET_DIR=/work/build/target INSTA_WORKSPACE_ROOT=/work/build/source/codex-rs RUST_MIN_STACK=16777216
+cargo clippy --locked -p codex-tui --tests -j {jobs} --message-format=json > /work/build/clippy.json || true
+python3 /repo/codex/model-guard/native/clippy_gate.py "$baseline" /work/build/clippy.json
+cargo test --locked -p codex-tui -j {jobs} --lib -- native_guard model_guard
+cargo test --locked -p codex-core -j {jobs} --test all -- model_routing
+""", jobs)
+
+
 def build_and_publish(args, tag, codex_version):
     work = (args.work_dir or Path.home() / ".cache/model-guard" / f"release-{codex_version}").expanduser().absolute()
     source = work / "source"
@@ -155,30 +180,23 @@ def build_and_publish(args, tag, codex_version):
     if args.changes:
         shutil.copyfile(args.changes, work / "changes.md")
         changes = " --changes /work/changes.md"
-    build = work / "build"
-    if build.exists():
-        shutil.rmtree(build)
     docker(image, mounts, "/work/source", f"""
 python3 /repo/codex/model-guard/native/rebase.py finish --source /work/source --official-package /official --tag {tag} --target-dir /work/target{version}{changes}
-python3 /repo/codex/model-guard/native/build.py --work-dir /work/build --official-package /official --jobs {args.jobs}
-lockfile=$(sha256sum /repo/codex/model-guard/native/0005-release-packaging.patch | cut -c1-16)
-baseline=/work/clippy-baseline-{upstream}-rust{rust}-$lockfile.json
-if [ ! -s "$baseline" ]; then
-  mkdir -p /work/clippy-baseline/source
-  git -C /work/build/source archive HEAD | tar -xf - -C /work/clippy-baseline/source
-  (cd /work/clippy-baseline/source && git apply --include=codex-rs/Cargo.lock /repo/codex/model-guard/native/0005-release-packaging.patch)
-  (cd /work/clippy-baseline/source/codex-rs && CARGO_TARGET_DIR=/work/clippy-baseline/target cargo clippy --locked -p codex-tui --tests -j {args.jobs} --message-format=json > /work/clippy-baseline/clippy.json || true)
-  python3 /repo/codex/model-guard/native/clippy_gate.py --verify /work/clippy-baseline/clippy.json
-  mv /work/clippy-baseline/clippy.json "$baseline"
-  rm -rf /work/clippy-baseline
-fi
-cd /work/build/source/codex-rs
-export CARGO_TARGET_DIR=/work/build/target INSTA_WORKSPACE_ROOT=/work/build/source/codex-rs RUST_MIN_STACK=16777216
-cargo clippy --locked -p codex-tui --tests -j {args.jobs} --message-format=json > /work/build/clippy.json || true
-python3 /repo/codex/model-guard/native/clippy_gate.py "$baseline" /work/build/clippy.json
-cargo test --locked -p codex-tui -j {args.jobs} --lib -- native_guard model_guard
-cargo test --locked -p codex-core -j {args.jobs} --test all -- model_routing
 """, args.jobs)
+    # The package, clippy and the Rust cases depend only on these; a build
+    # already verified for the same values is reused, so a rerun after a
+    # failure in the host tests does not compile again.
+    pinned = release()
+    identity = {name: pinned[name] for name in ("plugin_version", "upstream_commit", "rust_version", "patches")}
+    build = work / "build"
+    verified = build / "verified.json"
+    if verified.is_file() and json.loads(verified.read_text()) == identity:
+        print(f"Reusing the verified build of model-guard {identity['plugin_version']} in {build}")
+    else:
+        if build.exists():
+            shutil.rmtree(build)
+        verify_build(image, mounts, upstream, rust, args.jobs)
+        verified.write_text(json.dumps(identity, indent=2) + "\n")
 
     native = build / "package/bin/codex"
     python = ensure_venv(work)
