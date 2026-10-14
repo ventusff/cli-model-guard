@@ -312,9 +312,13 @@ class NativeTerminalTests(unittest.TestCase):
             terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "Reply OK."], env, base)
             try:
                 # The session hosts its thread itself, where the guard ends the disclosed route.
-                terminal.wait(lambda: "without the shared background server" in terminal.text()
-                              and "STOPPED · ROUTE DIFF gpt-6-astra" in terminal.text())
-                self.assertIn("codex app-server daemon update --from-cli", " ".join(terminal.text().split()))
+                terminal.wait(lambda: "STOPPED · ROUTE DIFF gpt-6-astra" in terminal.text())
+                # The startup warning says why and names the command that switches the server.
+                terminal.send(b"\x1bOQ")
+                # Codex wraps lines at spaces and hyphens, so the text is compared without whitespace.
+                flat = lambda: "".join(terminal.text().split())
+                terminal.wait(lambda: "withoutthesharedbackgroundserver" in flat()
+                              and "codexapp-serverdaemonupdate--from-cli" in flat())
                 self.assertEqual(len(thread_requests(api)), 1)
                 # The official server keeps running untouched.
                 self.assertTrue(set(stock_server) <= set(fixture_daemons(base)))
