@@ -130,14 +130,19 @@ def stage_commits(source):
 
 def drop_generated(source):
     """Remove the lockfile and schema commits an earlier `finish` added, so the
-    tree carries the source patches only and the two are regenerated from it."""
+    tree carries the source patches only and the two are regenerated from it.
+    Only those two commits may follow the source patches; anything else is
+    work this step must not discard."""
     log = git(source, "log", "--reverse", "--format=%H %s", capture=True).stdout.splitlines()
-    generated = [index for index, line in enumerate(log)
-                 if line.partition(" ")[2] in (PACKAGING_PATCH, SCHEMAS_PATCH)]
-    if generated:
-        if any(line.partition(" ")[2] in SOURCE_PATCHES for line in log[generated[0]:]):
-            raise RuntimeError("A source patch commit follows the generated lockfile or schema commit")
-        git(source, "reset", "--quiet", "--hard", log[generated[0] - 1].split()[0])
+    subjects = [line.partition(" ")[2] for line in log]
+    generated = [index for index, subject in enumerate(subjects) if subject in (PACKAGING_PATCH, SCHEMAS_PATCH)]
+    if not generated:
+        return
+    first = generated[0]
+    if first == 0 or any(subject not in (PACKAGING_PATCH, SCHEMAS_PATCH) for subject in subjects[first:]):
+        raise RuntimeError("Commits other than the generated lockfile and schemas follow them; "
+                           "move them before the generated commits or drop them")
+    git(source, "reset", "--quiet", "--hard", log[first - 1].split()[0])
 
 
 def regenerate_packaging(source, cargo_env):
@@ -188,6 +193,8 @@ def replace_in(path, pairs):
 def finish(args):
     source = args.source.expanduser().absolute()
     official = args.official_package.expanduser().absolute()
+    if git(source, "status", "--porcelain", capture=True).stdout.strip():
+        raise RuntimeError(f"{source} has uncommitted changes; commit them to their patch or discard them")
     previous = release()
     upstream_commit, _ = stage_commits(source)
     toolchain = tomllib.loads((source / "codex-rs/rust-toolchain.toml").read_text())["toolchain"]["channel"]
@@ -195,6 +202,12 @@ def finish(args):
     if not tag:
         raise RuntimeError("Pass --tag: the upstream commit carries no tag in this clone")
     codex_version = tag.removeprefix("rust-v")
+    changes = args.changes.read_text().strip() + "\n" if args.changes else ""
+    if codex_version != previous["codex_version"]:
+        changes = (f"- **Codex: native build moved to official Codex {codex_version}** (`{upstream_commit}`): "
+                   f"the source patches are rebased and the package ships that release's helpers.\n" + changes)
+    elif not changes.strip():
+        raise RuntimeError(f"The release stays on Codex {codex_version}; describe its changes with --changes")
     cargo_env = dict(os.environ, CARGO_TARGET_DIR=str(args.target_dir or source / "codex-rs/target"),
                      RUSTUP_TOOLCHAIN=toolchain)
     drop_generated(source)
@@ -224,9 +237,7 @@ def finish(args):
         if (REPO / path).is_file():
             replace_in(path, prose)
     changelog = REPO / "CHANGELOG.md"
-    entry = (f"## {new_version} — {args.date}\n\n"
-             f"- **Codex: native build moved to official Codex {codex_version}** (`{upstream_commit}`): "
-             f"the source patches are rebased and the package ships that release's helpers.\n\n")
+    entry = f"## {new_version} — {args.date}\n\n{changes}\n"
     changelog.write_text(changelog.read_text().replace("# Changelog\n\n", "# Changelog\n\n" + entry, 1))
     print(f"{old_version} -> {new_version} on Codex {codex_version} ({upstream_commit}), Rust {toolchain}")
     return 0
@@ -268,6 +279,7 @@ def main():
     f.add_argument("--tag", help="Tag of the upstream commit when the clone carries no tag name")
     f.add_argument("--version", help="Plugin version to release; default bumps the minor version")
     f.add_argument("--date", default=__import__("datetime").date.today().isoformat())
+    f.add_argument("--changes", type=Path, help="Markdown bullets for the changelog entry; required when the Codex version stays")
     f.add_argument("--target-dir", type=Path, help="Cargo target directory for the regeneration builds")
     f.set_defaults(handler=finish)
     w = commands.add_parser("patches", help="Rewrite the six patches from a finished tree (after resolving by hand) and refresh their digests")

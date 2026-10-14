@@ -12,10 +12,13 @@ Clippy judges the patches, not upstream: `clippy_gate.py` compares the patched
 source with the official one (linted once per Codex release and Rust version,
 kept in the work directory) and fails only on diagnostics the patches add.
 
-`--dry-run` stops before the commit and restores the checkout. A patch that no
-longer merges stops the run with the conflicting files listed; resolve them in
-the work tree, commit each patch under its own name there, and run again with
-`--resume`, which skips the fetch and merge.
+`--dry-run` stops before the commit and restores the checkout; so does a
+failed run, which leaves the checkout as it found it. A patch that no longer
+merges stops the run with the conflicting files listed; resolve them in the
+work tree, commit each patch under its own name there, and run again with
+`--resume`, which skips the fetch and merge. A change to the guard on the
+Codex version already released is the same: commit it to its patch in the
+work tree and run with `--resume`, `--summary` and `--changes`.
 """
 import argparse
 import json
@@ -93,6 +96,8 @@ def main():
     parser.add_argument("--jobs", type=int, default=max(2, os.cpu_count() // 2), help="Cores for the container (default: half)")
     parser.add_argument("--dry-run", action="store_true", help="Build and verify, then restore the checkout instead of publishing")
     parser.add_argument("--resume", action="store_true", help="Skip fetch and merge: the work tree already carries the resolved patches")
+    parser.add_argument("--summary", help="What the release changes, for the commit title; default names the Codex version")
+    parser.add_argument("--changes", type=Path, help="Markdown bullets for the changelog entry; required when the Codex version stays")
     args = parser.parse_args()
 
     if out(["git", "status", "--porcelain"], cwd=REPO):
@@ -103,9 +108,27 @@ def main():
     pinned = release()
     tag = args.tag or latest_stable_tag()
     codex_version = tag.removeprefix("rust-v")
-    if codex_version == pinned["codex_version"] and pinned["sha256"] and not args.dry_run:
+    same_codex = codex_version == pinned["codex_version"]
+    if same_codex and pinned["sha256"] and not (args.resume or args.dry_run):
         print(f"Codex {codex_version} is already the released native package ({pinned['plugin_version']}); nothing to do.")
         return 0
+    if same_codex and not (args.summary and args.changes):
+        sys.exit(f"release: the release stays on Codex {codex_version}; say what it changes with --summary and --changes")
+    try:
+        return build_and_publish(args, tag, codex_version)
+    except BaseException:
+        restore_checkout()
+        print("release: the checkout is restored; the work tree keeps the patches for --resume", file=sys.stderr)
+        raise
+
+
+def restore_checkout():
+    """Undo what this run wrote to the checkout, which was clean when it started."""
+    run(["git", "checkout", "--", "."], cwd=REPO)
+    run(["git", "clean", "-fdq", "--", "codex/model-guard/native"], cwd=REPO)
+
+
+def build_and_publish(args, tag, codex_version):
     work = (args.work_dir or Path.home() / ".cache/model-guard" / f"release-{codex_version}").expanduser().absolute()
     source = work / "source"
     official = ensure_official(work, tag)
@@ -128,19 +151,25 @@ def main():
     (work / "target").mkdir(exist_ok=True)
     mounts = {str(REPO): "/repo", str(work): "/work", str(official): "/official:ro"}
     version = f" --version {args.version}" if args.version else ""
+    changes = ""
+    if args.changes:
+        shutil.copyfile(args.changes, work / "changes.md")
+        changes = " --changes /work/changes.md"
     build = work / "build"
     if build.exists():
         shutil.rmtree(build)
     docker(image, mounts, "/work/source", f"""
-python3 /repo/codex/model-guard/native/rebase.py finish --source /work/source --official-package /official --tag {tag} --target-dir /work/target{version}
+python3 /repo/codex/model-guard/native/rebase.py finish --source /work/source --official-package /official --tag {tag} --target-dir /work/target{version}{changes}
 python3 /repo/codex/model-guard/native/build.py --work-dir /work/build --official-package /official --jobs {args.jobs}
-baseline=/work/clippy-baseline-{upstream}-rust{rust}.json
+lockfile=$(sha256sum /repo/codex/model-guard/native/0005-release-packaging.patch | cut -c1-16)
+baseline=/work/clippy-baseline-{upstream}-rust{rust}-$lockfile.json
 if [ ! -s "$baseline" ]; then
   mkdir -p /work/clippy-baseline/source
   git -C /work/build/source archive HEAD | tar -xf - -C /work/clippy-baseline/source
   (cd /work/clippy-baseline/source && git apply --include=codex-rs/Cargo.lock /repo/codex/model-guard/native/0005-release-packaging.patch)
-  (cd /work/clippy-baseline/source/codex-rs && CARGO_TARGET_DIR=/work/clippy-baseline/target cargo clippy --locked -p codex-tui --tests -j {args.jobs} --message-format=json > "$baseline.part" || true)
-  mv "$baseline.part" "$baseline"
+  (cd /work/clippy-baseline/source/codex-rs && CARGO_TARGET_DIR=/work/clippy-baseline/target cargo clippy --locked -p codex-tui --tests -j {args.jobs} --message-format=json > /work/clippy-baseline/clippy.json || true)
+  python3 /repo/codex/model-guard/native/clippy_gate.py --verify /work/clippy-baseline/clippy.json
+  mv /work/clippy-baseline/clippy.json "$baseline"
   rm -rf /work/clippy-baseline
 fi
 cd /work/build/source/codex-rs
@@ -163,13 +192,13 @@ cargo test --locked -p codex-core -j {args.jobs} --test all -- model_routing
     print(f"Built model-guard {current['plugin_version']} on Codex {codex_version}: {archive} ({current['sha256']})")
 
     if args.dry_run:
-        run(["git", "checkout", "--", "."], cwd=REPO)
-        run(["git", "clean", "-fdq", "--", "codex/model-guard/native"], cwd=REPO)
+        restore_checkout()
         print("Dry run: the checkout is restored; nothing was committed or published.")
         return 0
     tag_name = f"v{current['plugin_version']}"
     run(["git", "add", "-A"], cwd=REPO)
-    run(["git", "commit", "-q", "-m", f"model-guard {current['plugin_version']} — Codex {codex_version}"], cwd=REPO)
+    run(["git", "commit", "-q", "-m", f"model-guard {current['plugin_version']} — {args.summary or f'Codex {codex_version}'}"],
+        cwd=REPO)
     run(["git", "push", "-q", "origin", "HEAD:main"], cwd=REPO)
     run(["git", "tag", tag_name], cwd=REPO)
     run(["git", "push", "-q", "origin", tag_name], cwd=REPO)
