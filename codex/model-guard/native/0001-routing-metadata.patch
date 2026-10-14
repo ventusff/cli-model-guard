@@ -1,21 +1,50 @@
 diff --git a/codex-rs/app-server-protocol/src/protocol/common.rs b/codex-rs/app-server-protocol/src/protocol/common.rs
-index 3e73b44f..ec942a03 100644
+index 3e73b44f..92bf505b 100644
 --- a/codex-rs/app-server-protocol/src/protocol/common.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/common.rs
-@@ -2014,6 +2014,8 @@ server_notification_definitions! {
+@@ -701,6 +701,17 @@ client_request_definitions! {
+         serialization: thread_id(params.thread_id),
+         response: v2::ThreadSettingsUpdateResponse,
+     },
++    #[experimental("thread/modelGuard/update")]
++    /// Read or change Model Guard's state for a thread.
++    ///
++    /// The guard's registry changes atomically, so the request does not wait
++    /// behind the thread's other requests; a client may await it on its event
++    /// loop.
++    ThreadModelGuardUpdate => "thread/modelGuard/update" {
++        params: v2::ThreadModelGuardUpdateParams,
++        serialization: None,
++        response: v2::ThreadModelGuardUpdateResponse,
++    },
+     #[experimental("thread/memoryMode/set")]
+     ThreadMemoryModeSet => "thread/memoryMode/set" {
+         params: v2::ThreadMemoryModeSetParams,
+@@ -2014,6 +2025,10 @@ server_notification_definitions! {
      /// Deprecated: Use `ContextCompaction` item type instead.
      ContextCompacted => "thread/compacted" (v2::ContextCompactedNotification),
      ModelRerouted => "model/rerouted" (v2::ModelReroutedNotification),
 +    #[experimental("model/routing/updated")]
 +    ModelRoutingUpdated => "model/routing/updated" (v2::ModelRoutingUpdatedNotification),
++    #[experimental("thread/modelGuard/updated")]
++    ThreadModelGuardUpdated => "thread/modelGuard/updated" (v2::ThreadModelGuardUpdatedNotification),
      ModelVerification => "model/verification" (v2::ModelVerificationNotification),
      AuthRecoveryStarted => "modelProvider/authRecoveryStarted" (v2::AuthRecoveryNotification),
      AuthRecoveryCompleted => "modelProvider/authRecoveryCompleted" (v2::AuthRecoveryNotification),
 diff --git a/codex-rs/app-server-protocol/src/protocol/v2/model.rs b/codex-rs/app-server-protocol/src/protocol/v2/model.rs
-index c9a68ac3..1742ac35 100644
+index c9a68ac3..4e0dffe4 100644
 --- a/codex-rs/app-server-protocol/src/protocol/v2/model.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/v2/model.rs
-@@ -192,6 +192,22 @@ pub struct ModelReroutedNotification {
+@@ -7,6 +7,8 @@ use codex_protocol::openai_models::ModelAccessPrograms as CoreModelAccessProgram
+ use codex_protocol::openai_models::ModelAvailabilityNux as CoreModelAvailabilityNux;
+ use codex_protocol::openai_models::ReasoningEffort;
+ use codex_protocol::openai_models::default_input_modalities;
++use codex_protocol::protocol::ModelGuardEvent as CoreModelGuardEvent;
++pub use codex_protocol::protocol::ModelGuardHold;
+ use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
+ use codex_protocol::protocol::ModelVerification as CoreModelVerification;
+ use codex_protocol::protocol::MultiAgentVersion as CoreMultiAgentVersion;
+@@ -192,6 +194,72 @@ pub struct ModelReroutedNotification {
      pub reason: ModelRerouteReason,
  }
  
@@ -35,14 +64,64 @@ index c9a68ac3..1742ac35 100644
 +    pub service_tier: Option<String>,
 +}
 +
++/// Model Guard's state for a thread: the model the user selected and, while
++/// the thread sends no model request, why it is held.
++#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
++#[serde(rename_all = "camelCase")]
++#[ts(export_to = "v2/")]
++pub struct ModelGuardState {
++    pub selected_model: String,
++    pub hold: Option<ModelGuardHold>,
++}
++
++impl From<CoreModelGuardEvent> for ModelGuardState {
++    fn from(event: CoreModelGuardEvent) -> Self {
++        Self {
++            selected_model: event.selected_model,
++            hold: event.hold,
++        }
++    }
++}
++
++/// Reads or changes Model Guard's state for a thread. Without either field
++/// the request only reads it.
++#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
++#[serde(rename_all = "camelCase")]
++#[ts(export_to = "v2/")]
++pub struct ThreadModelGuardUpdateParams {
++    pub thread_id: String,
++    /// The model the user selected; it becomes the selection and lifts the hold.
++    #[ts(optional = nullable)]
++    pub select_model: Option<String>,
++    /// The client's reasoning heuristic fired this many times; the thread is held.
++    #[ts(optional = nullable)]
++    pub reasoning_hits: Option<u32>,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
++#[serde(rename_all = "camelCase")]
++#[ts(export_to = "v2/")]
++pub struct ThreadModelGuardUpdateResponse {
++    /// Null when Model Guard does not follow the thread.
++    pub guard: Option<ModelGuardState>,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
++#[serde(rename_all = "camelCase")]
++#[ts(export_to = "v2/")]
++pub struct ThreadModelGuardUpdatedNotification {
++    pub thread_id: String,
++    pub guard: ModelGuardState,
++}
++
  #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
  #[serde(rename_all = "camelCase")]
  #[ts(export_to = "v2/")]
 diff --git a/codex-rs/app-server/src/bespoke_event_handling.rs b/codex-rs/app-server/src/bespoke_event_handling.rs
-index f6328574..275b5eea 100644
+index f6328574..de91f261 100644
 --- a/codex-rs/app-server/src/bespoke_event_handling.rs
 +++ b/codex-rs/app-server/src/bespoke_event_handling.rs
-@@ -409,6 +409,22 @@ pub(crate) async fn apply_bespoke_event_handling(
+@@ -409,6 +409,31 @@ pub(crate) async fn apply_bespoke_event_handling(
                  .send_server_notification(ServerNotification::ModelRerouted(notification))
                  .await;
          }
@@ -62,21 +141,90 @@ index f6328574..275b5eea 100644
 +                .send_server_notification(ServerNotification::ModelRoutingUpdated(notification))
 +                .await;
 +        }
++        EventMsg::ModelGuard(event) => {
++            let notification = codex_app_server_protocol::ThreadModelGuardUpdatedNotification {
++                thread_id: conversation_id.to_string(),
++                guard: event.into(),
++            };
++            outgoing
++                .send_server_notification(ServerNotification::ThreadModelGuardUpdated(notification))
++                .await;
++        }
          EventMsg::ModelVerification(event) => {
              let notification = ModelVerificationNotification {
                  thread_id: conversation_id.to_string(),
+diff --git a/codex-rs/app-server/src/message_processor.rs b/codex-rs/app-server/src/message_processor.rs
+index 6b705c55..7f54c501 100644
+--- a/codex-rs/app-server/src/message_processor.rs
++++ b/codex-rs/app-server/src/message_processor.rs
+@@ -1436,6 +1436,11 @@ impl MessageProcessor {
+                     .thread_settings_update(&request_id, params)
+                     .await
+             }
++            ClientRequest::ThreadModelGuardUpdate { params, .. } => {
++                self.thread_processor
++                    .thread_model_guard_update(params)
++                    .await
++            }
+             ClientRequest::ThreadMemoryModeSet { params, .. } => {
+                 self.thread_processor.thread_memory_mode_set(params).await
+             }
 diff --git a/codex-rs/app-server/src/notification_media.rs b/codex-rs/app-server/src/notification_media.rs
-index 4223ea79..59ac2013 100644
+index 4223ea79..11335ca3 100644
 --- a/codex-rs/app-server/src/notification_media.rs
 +++ b/codex-rs/app-server/src/notification_media.rs
-@@ -111,6 +111,7 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
+@@ -111,6 +111,8 @@ pub(crate) fn without_notification_media(notification: ServerNotification) -> Se
          | ServerNotification::ReasoningTextDelta(_)
          | ServerNotification::ContextCompacted(_)
          | ServerNotification::ModelRerouted(_)
 +        | ServerNotification::ModelRoutingUpdated(_)
++        | ServerNotification::ThreadModelGuardUpdated(_)
          | ServerNotification::ModelVerification(_)
          | ServerNotification::AuthRecoveryStarted(_)
          | ServerNotification::AuthRecoveryCompleted(_)
+diff --git a/codex-rs/app-server/src/request_processors/thread_processor.rs b/codex-rs/app-server/src/request_processors/thread_processor.rs
+index 8bdf6bbe..c0a31353 100644
+--- a/codex-rs/app-server/src/request_processors/thread_processor.rs
++++ b/codex-rs/app-server/src/request_processors/thread_processor.rs
+@@ -746,6 +746,38 @@ impl ThreadRequestProcessor {
+             .map(|response| Some(response.into()))
+     }
+ 
++    /// Reads Model Guard's state for a thread, records the user's selection
++    /// of a model, or holds the thread for the client's reasoning heuristic.
++    /// A change is announced to every client, as the guard's own changes are.
++    pub(crate) async fn thread_model_guard_update(
++        &self,
++        params: codex_app_server_protocol::ThreadModelGuardUpdateParams,
++    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
++        let thread = ThreadId::from_string(&params.thread_id)
++            .map_err(|err| invalid_request(format!("invalid thread id: {err}")))?;
++        let (state, changes) = match (params.select_model, params.reasoning_hits) {
++            (Some(model), _) => (codex_core::model_guard::select(thread, &model), true),
++            (None, Some(hits)) => (
++                codex_core::model_guard::hold_for_reasoning(thread, hits),
++                true,
++            ),
++            (None, None) => (codex_core::model_guard::state(thread), false),
++        };
++        let guard = state.map(codex_app_server_protocol::ModelGuardState::from);
++        if changes && let Some(guard) = guard.clone() {
++            self.outgoing
++                .send_server_notification(ServerNotification::ThreadModelGuardUpdated(
++                    codex_app_server_protocol::ThreadModelGuardUpdatedNotification {
++                        thread_id: params.thread_id,
++                        guard,
++                    },
++                ))
++                .await;
++        }
++        let response = codex_app_server_protocol::ThreadModelGuardUpdateResponse { guard };
++        Ok(Some(response.into()))
++    }
++
+     pub(crate) async fn memory_reset(
+         &self,
+     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
 diff --git a/codex-rs/codex-api/src/common.rs b/codex-rs/codex-api/src/common.rs
 index 42c9fecd..3cceef3a 100644
 --- a/codex-rs/codex-api/src/common.rs
@@ -200,7 +348,7 @@ index 78885f43..4c71716a 100644
                  response_id,
                  token_usage: None,
 diff --git a/codex-rs/core/src/client.rs b/codex-rs/core/src/client.rs
-index 24f2964f..57dd3af5 100644
+index 24f2964f..0a6ef4ed 100644
 --- a/codex-rs/core/src/client.rs
 +++ b/codex-rs/core/src/client.rs
 @@ -127,6 +127,8 @@ use crate::attestation::X_OAI_ATTESTATION_HEADER;
@@ -242,99 +390,156 @@ index 24f2964f..57dd3af5 100644
          self
      }
  
-@@ -1779,17 +1785,22 @@ impl ModelClientSession {
+@@ -1779,6 +1785,17 @@ impl ModelClientSession {
                  client_setup.api_auth,
              )
              .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-+            let request_metadata = self
++            let routing = match self
 +                .client
 +                .begin_model_request(&request, responses_metadata)
-+                .await;
++                .await
++            {
++                Ok(routing) => routing,
++                Err(err) => {
++                    inference_trace_attempt.record_failed(&err, None, /*output_items*/ &[]);
++                    return Err(err);
++                }
++            };
              let stream_result = client.stream_request(request, options).await;
  
              match stream_result {
-                 Ok(stream) => {
--                    let (stream, _) = map_response_stream(
-+                    let (mut stream, _) = map_response_stream(
-                         stream,
-                         request_session_telemetry,
+@@ -1789,6 +1806,7 @@ impl ModelClientSession {
                          inference_trace_attempt,
                          Arc::clone(&self.client.state.provider),
                          interceptors,
++                        routing,
                      );
-+                    stream.request_metadata = request_metadata;
                      return Ok(stream);
                  }
-                 Err(ApiError::Transport(unauthorized_transport))
-@@ -2089,6 +2100,13 @@ impl ModelClientSession {
+@@ -2089,6 +2107,26 @@ impl ModelClientSession {
                      ),
                  ],
              );
-+            let request_metadata = if warmup {
++            let routing = if warmup {
++                crate::model_guard::admit_preparation(self.client.state.thread_id, &request.model)?;
 +                None
 +            } else {
-+                self.client
++                match self
++                    .client
 +                    .begin_model_request(&request, responses_metadata)
 +                    .await
++                {
++                    Ok(routing) => routing,
++                    Err(err) => {
++                        inference_trace_attempt.record_failed(
++                            &err,
++                            None,
++                            /*output_items*/ &[],
++                        );
++                        return Err(err);
++                    }
++                }
 +            };
              let stream_result = websocket_connection
                  .stream_request(
                      ws_request,
-@@ -2113,13 +2131,14 @@ impl ModelClientSession {
-                 );
-                 err
-             })?;
--            let (stream, last_request_rx) = map_response_stream(
-+            let (mut stream, last_request_rx) = map_response_stream(
-                 stream_result,
-                 request_session_telemetry,
+@@ -2119,6 +2157,7 @@ impl ModelClientSession {
                  inference_trace_attempt,
                  Arc::clone(&self.client.state.provider),
                  interceptors,
++                routing,
              );
-+            stream.request_metadata = request_metadata;
              self.websocket_session.last_response_rx = Some(last_request_rx);
              return Ok(WebsocketStreamOutcome::Stream(stream));
-         }
-@@ -2528,6 +2547,7 @@ where
- 
-     (
-         ResponseStream {
-+            request_metadata: None,
-             rx_event,
-             interrupt: None,
-             consumer_dropped: consumer_dropped_for_stream,
-diff --git a/codex-rs/core/src/client_common.rs b/codex-rs/core/src/client_common.rs
-index 7a870f41..ccaf6c8e 100644
---- a/codex-rs/core/src/client_common.rs
-+++ b/codex-rs/core/src/client_common.rs
-@@ -116,6 +116,7 @@ fn normalize_image_detail(detail: &mut Option<ImageDetail>, model_info: &ModelIn
- }
- 
- pub struct ResponseStream {
-+    pub(crate) request_metadata: Option<codex_protocol::protocol::ModelRoutingEvent>,
-     pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
-     pub(crate) interrupt: Option<oneshot::Sender<()>>,
-     /// Signals the mapper task that the consumer stopped polling before the
+@@ -2371,6 +2410,7 @@ fn map_response_stream(
+     inference_trace_attempt: InferenceTraceAttempt,
+     provider: SharedModelProvider,
+     interceptors: Vec<Box<dyn codex_extension_api::ModelResponseInterceptor>>,
++    routing: Option<routing::RequestRouting>,
+ ) -> (ResponseStream, oneshot::Receiver<LastResponse>) {
+     let upstream_request_id = api_stream.upstream_request_id.take();
+     let interrupt = api_stream.interrupt.take();
+@@ -2380,6 +2420,7 @@ fn map_response_stream(
+         session_telemetry,
+         inference_trace_attempt,
+         provider,
++        routing,
+     );
+     stream.interrupt = interrupt;
+     (stream, last_response)
+@@ -2391,6 +2432,7 @@ fn map_response_events<S>(
+     session_telemetry: SessionTelemetry,
+     inference_trace_attempt: InferenceTraceAttempt,
+     provider: SharedModelProvider,
++    mut routing: Option<routing::RequestRouting>,
+ ) -> (ResponseStream, oneshot::Receiver<LastResponse>)
+ where
+     S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
+@@ -2481,6 +2523,17 @@ where
+                     }
+                 }
+                 Ok(event) => {
++                    if let Some(routing) = routing.as_mut()
++                        && let Err(err) = routing.observe(&event).await
++                    {
++                        inference_trace_attempt.record_failed(
++                            &err,
++                            upstream_request_id,
++                            &items_added,
++                        );
++                        let _ = tx_event.send(Err(err)).await;
++                        return;
++                    }
+                     if matches!(&event, ResponseEvent::OutputItemAdded(_)) && ttft_ms.is_none() {
+                         ttft_ms = Some(
+                             i64::try_from(request_start.elapsed().as_millis()).unwrap_or(i64::MAX),
 diff --git a/codex-rs/core/src/client_routing.rs b/codex-rs/core/src/client_routing.rs
 new file mode 100644
-index 00000000..c4891983
+index 00000000..db002ba6
 --- /dev/null
 +++ b/codex-rs/core/src/client_routing.rs
-@@ -0,0 +1,38 @@
-+//! Allowlisted routing metadata copied from the final outgoing request.
+@@ -0,0 +1,108 @@
++//! Routing of each model request: Model Guard admits it, the thread learns
++//! which model it named and what the response disclosed about the model that
++//! served it, and a disclosure of another model ends the response.
 +use super::*;
++use crate::model_guard;
 +use codex_protocol::protocol::ModelRoutingEvent;
 +
++/// One admitted model request of a thread's turn, followed while its
++/// response streams.
++pub(super) struct RequestRouting {
++    thread: ThreadId,
++    turn_id: String,
++    sender: Sender<ProtocolEvent>,
++    event: ModelRoutingEvent,
++}
++
 +impl ModelClient {
++    /// Admits a request about to be sent and announces its routing. Model
++    /// Guard refuses a request on a held thread or for a model other than the
++    /// selection; nothing is sent then. Requests outside a turn of a thread
++    /// with a provider carry no routing.
 +    pub(super) async fn begin_model_request(
 +        &self,
 +        request: &ResponsesApiRequest,
 +        metadata: &CodexResponsesMetadata,
-+    ) -> Option<ModelRoutingEvent> {
-+        let turn_id = metadata.turn_id.as_ref()?;
-+        let model_provider = self.model_provider_id.as_ref()?;
-+        let routing = ModelRoutingEvent {
++    ) -> Result<Option<RequestRouting>> {
++        let (Some(turn_id), Some(model_provider), Some(sender)) = (
++            metadata.turn_id.as_ref(),
++            self.model_provider_id.as_ref(),
++            self.event_sender.as_ref(),
++        ) else {
++            return Ok(None);
++        };
++        let thread = self.state.thread_id;
++        if let Err(refusal) = model_guard::admit(thread, &request.model) {
++            if refusal.changed {
++                announce(sender, turn_id, EventMsg::ModelGuard(refusal.state.clone())).await;
++            }
++            return Err(refusal.into_error());
++        }
++        let event = ModelRoutingEvent {
 +            request_id: Uuid::new_v4().to_string(),
 +            requested_model: request.model.clone(),
 +            server_model: None,
@@ -349,34 +554,894 @@ index 00000000..c4891983
 +        };
 +        // Invalidate the previous disclosure before network I/O, including a
 +        // transport retry. No request body, credentials or response text is sent.
-+        if let Some(sender) = self.event_sender.as_ref() {
-+            let _ = sender
-+                .send(ProtocolEvent {
-+                    id: turn_id.clone(),
-+                    msg: EventMsg::ModelRouting(routing.clone()),
-+                })
-+                .await;
-+        }
-+        Some(routing)
++        announce(sender, turn_id, EventMsg::ModelRouting(event.clone())).await;
++        Ok(Some(RequestRouting {
++            thread,
++            turn_id: turn_id.clone(),
++            sender: sender.clone(),
++            event,
++        }))
 +    }
 +}
-diff --git a/codex-rs/core/src/compact_remote_v2.rs b/codex-rs/core/src/compact_remote_v2.rs
-index 6a061086..7c328f2b 100644
---- a/codex-rs/core/src/compact_remote_v2.rs
-+++ b/codex-rs/core/src/compact_remote_v2.rs
-@@ -834,6 +834,7 @@ mod tests {
-         }
-         drop(tx_event);
-         ResponseStream {
-+            request_metadata: None,
-             rx_event,
-             interrupt: None,
-             consumer_dropped: CancellationToken::new(),
++
++impl RequestRouting {
++    /// Records what a response event disclosed about the model that served
++    /// the request: the effective-model header or the body's model label. A
++    /// disclosure of another model holds the thread and ends the response.
++    pub(super) async fn observe(&mut self, event: &ResponseEvent) -> Result<()> {
++        let (slot, value) = match event {
++            ResponseEvent::ServerModel(model) => (&mut self.event.server_model, model),
++            ResponseEvent::ResponseModelLabel(label) => (&mut self.event.response_label, label),
++            _ => return Ok(()),
++        };
++        if slot.as_deref() == Some(value.as_str()) {
++            return Ok(());
++        }
++        *slot = Some(value.clone());
++        self.announce(EventMsg::ModelRouting(self.event.clone()))
++            .await;
++        let Some((state, changed)) = model_guard::observe(
++            self.thread,
++            &self.event.requested_model,
++            self.event.server_model.as_deref(),
++            self.event.response_label.as_deref(),
++        ) else {
++            return Ok(());
++        };
++        if changed {
++            self.announce(EventMsg::ModelGuard(state.clone())).await;
++        }
++        Err(model_guard::held_error(&state))
++    }
++
++    async fn announce(&self, msg: EventMsg) {
++        announce(&self.sender, &self.turn_id, msg).await;
++    }
++}
++
++async fn announce(sender: &Sender<ProtocolEvent>, turn_id: &str, msg: EventMsg) {
++    let _ = sender
++        .send(ProtocolEvent {
++            id: turn_id.to_owned(),
++            msg,
++        })
++        .await;
++}
+diff --git a/codex-rs/core/src/client_tests.rs b/codex-rs/core/src/client_tests.rs
+index 779a40ca..d59e7d11 100644
+--- a/codex-rs/core/src/client_tests.rs
++++ b/codex-rs/core/src/client_tests.rs
+@@ -1565,6 +1565,7 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
+         test_session_telemetry(),
+         attempt,
+         test_model_provider(),
++        /*routing*/ None,
+     );
+ 
+     let observed = stream
+@@ -1616,6 +1617,7 @@ async fn response_stream_records_last_model_feedback_ids() {
+         test_session_telemetry(),
+         InferenceTraceAttempt::disabled(),
+         test_model_provider(),
++        /*routing*/ None,
+     );
+ 
+     while stream.next().await.is_some() {}
+@@ -1839,6 +1841,7 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
+         test_session_telemetry(),
+         attempt,
+         test_model_provider(),
++        /*routing*/ None,
+     );
+ 
+     // Fill the mapper channel with non-terminal events, then yield one output
+@@ -2136,6 +2139,7 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
+         attempt,
+         test_model_provider(),
+         vec![Box::new(ReplaceOutput)],
++        /*routing*/ None,
+     );
+     let mut delivered = Vec::new();
+     while let Some(event) = stream.next().await {
+diff --git a/codex-rs/core/src/compact.rs b/codex-rs/core/src/compact.rs
+index f4db71b6..482e9615 100644
+--- a/codex-rs/core/src/compact.rs
++++ b/codex-rs/core/src/compact.rs
+@@ -327,7 +327,9 @@ async fn run_compact_task_inner_impl(
+             Err(err)
+                 if matches!(
+                     err.details(),
+-                    CodexErrorDetails::Interrupted | CodexErrorDetails::TurnAborted
++                    CodexErrorDetails::Interrupted
++                        | CodexErrorDetails::TurnAborted
++                        | CodexErrorDetails::ModelGuardHeld(_)
+                 ) =>
+             {
+                 return Err(err);
+diff --git a/codex-rs/core/src/compact_model_fallback.rs b/codex-rs/core/src/compact_model_fallback.rs
+index 9e9a6213..4aa7412b 100644
+--- a/codex-rs/core/src/compact_model_fallback.rs
++++ b/codex-rs/core/src/compact_model_fallback.rs
+@@ -17,6 +17,7 @@ pub(crate) fn should_retry_with_current_model(
+         CodexErrorDetails::TurnAborted
+             | CodexErrorDetails::Interrupted
+             | CodexErrorDetails::SessionBudgetExceeded
++            | CodexErrorDetails::ModelGuardHeld(_)
+     ) || (previous.model_info().slug == current.model_info().slug
+         && previous.cyber_access_program == current.cyber_access_program)
+     {
+diff --git a/codex-rs/core/src/lib.rs b/codex-rs/core/src/lib.rs
+index a2b44e3f..f38320ef 100644
+--- a/codex-rs/core/src/lib.rs
++++ b/codex-rs/core/src/lib.rs
+@@ -9,6 +9,7 @@ mod apply_patch;
+ mod apps;
+ mod client;
+ mod client_common;
++pub mod model_guard;
+ mod model_request;
+ mod realtime_context;
+ mod realtime_conversation;
+diff --git a/codex-rs/core/src/model_guard.rs b/codex-rs/core/src/model_guard.rs
+new file mode 100644
+index 00000000..6dc426af
+--- /dev/null
++++ b/codex-rs/core/src/model_guard.rs
+@@ -0,0 +1,415 @@
++//! Model Guard keeps every thread it follows on the model the user selected.
++//!
++//! Each followed thread has a selection and, when something went wrong, a
++//! hold. Two points decide everything: a model request is admitted only on a
++//! thread that is not held and only for the selected model, and a response
++//! that discloses another model (an effective-model header, or a body label
++//! of another family or size tier) holds the thread and ends the response.
++//! Every model request of a thread passes both points, whoever started its
++//! turn, so a held thread does no model work at all until the user selects a
++//! model again. A refused request ends its turn with a terminal error.
++//!
++//! A thread Codex runs on another thread's behalf (a sub-agent, a review, an
++//! approval review) is held while any thread it runs for is held. The user's
++//! selection on a thread releases every thread run on its behalf as well,
++//! since some of them (an approval review) offer no selection of their own.
++//!
++//! The registry lives as long as the process that hosts the threads, so a
++//! thread keeps its selection and its hold across the clients attached to it.
++
++use std::collections::HashMap;
++use std::sync::LazyLock;
++use std::sync::Mutex;
++
++use codex_features::Feature;
++use codex_protocol::ThreadId;
++use codex_protocol::error::CodexErr;
++use codex_protocol::protocol::ModelGuardEvent;
++use codex_protocol::protocol::ModelGuardHold;
++
++use crate::config::Config;
++
++type Threads = HashMap<ThreadId, Followed>;
++
++static THREADS: LazyLock<Mutex<Threads>> = LazyLock::new(Mutex::default);
++
++/// A followed thread: its own selection and hold, and the thread it runs on
++/// behalf of, whose hold holds it as well.
++struct Followed {
++    state: ModelGuardEvent,
++    runs_for: Option<ThreadId>,
++}
++
++/// Whether the Model Guard plugin is enabled in `config`.
++pub fn enabled(config: &Config) -> bool {
++    let effective_config = config.config_layer_stack.effective_config();
++    config.features.enabled(Feature::Plugins)
++        && effective_config
++            .get("plugins")
++            .and_then(toml::Value::as_table)
++            .is_some_and(|plugins| {
++                plugins.iter().any(|(name, value)| {
++                    name.split_once('@')
++                        .is_some_and(|(plugin, _)| plugin == "model-guard")
++                        && value
++                            .get("enabled")
++                            .and_then(toml::Value::as_bool)
++                            .unwrap_or(true)
++                })
++            })
++}
++
++/// The model the user configured: the `model` of the configuration layers
++/// (config files, the selected profile, command-line `-c`). A resumed thread
++/// carries its last model in `config.model`; that one is the thread's, not
++/// the user's choice.
++pub(crate) fn configured_model(config: &Config) -> Option<String> {
++    config
++        .config_layer_stack
++        .effective_config()
++        .get("model")
++        .and_then(toml::Value::as_str)
++        .map(str::to_owned)
++}
++
++/// How a thread came to exist, which decides its selection when the guard
++/// first follows it.
++pub(crate) enum Origin {
++    /// A thread the user started or resumed: its selection is the configured
++    /// model, so a thread restored on another model is held at once.
++    User { configured: Option<String> },
++    /// A new fork of a thread carries that thread's selection and hold.
++    Fork {
++        parent: ThreadId,
++        configured: Option<String>,
++    },
++    /// A thread Codex runs on a thread's behalf (a sub-agent, a review, an
++    /// approval review) uses the model it was configured with and is held
++    /// while its parent is held.
++    Child { parent: ThreadId },
++}
++
++/// Starts following `thread`, which runs on `model`, unless the guard
++/// already follows it. Returns the thread's state.
++pub(crate) fn follow(thread: ThreadId, origin: Origin, model: &str) -> ModelGuardEvent {
++    let mut threads = lock();
++    if let Some(followed) = threads.get(&thread) {
++        return effective(&threads, followed);
++    }
++    let followed = match origin {
++        Origin::User { configured } => Followed {
++            state: held_unless_selected(configured, model),
++            runs_for: None,
++        },
++        Origin::Fork { parent, configured } => Followed {
++            state: effective_of(&threads, parent)
++                .unwrap_or_else(|| held_unless_selected(configured, model)),
++            runs_for: None,
++        },
++        Origin::Child { parent } => Followed {
++            state: ModelGuardEvent {
++                selected_model: model.to_owned(),
++                hold: None,
++            },
++            runs_for: Some(parent),
++        },
++    };
++    let state = effective(&threads, &followed);
++    threads.insert(thread, followed);
++    state
++}
++
++fn held_unless_selected(configured: Option<String>, model: &str) -> ModelGuardEvent {
++    let selected_model = configured.unwrap_or_else(|| model.to_owned());
++    let hold = (!same_model(&selected_model, model)).then(|| ModelGuardHold::Request {
++        selected: selected_model.clone(),
++        requested: model.to_owned(),
++    });
++    ModelGuardEvent {
++        selected_model,
++        hold,
++    }
++}
++
++/// A thread's selection, and its own hold or else the hold of the nearest
++/// thread it runs on behalf of.
++fn effective(threads: &Threads, followed: &Followed) -> ModelGuardEvent {
++    let mut state = followed.state.clone();
++    let mut runs_for = followed.runs_for;
++    // Each step goes to another followed thread, so the walk ends within the
++    // registry's size even on a malformed chain.
++    for _ in 0..threads.len() {
++        if state.hold.is_some() {
++            break;
++        }
++        let Some(parent) = runs_for.and_then(|parent| threads.get(&parent)) else {
++            break;
++        };
++        state.hold.clone_from(&parent.state.hold);
++        runs_for = parent.runs_for;
++    }
++    state
++}
++
++fn effective_of(threads: &Threads, thread: ThreadId) -> Option<ModelGuardEvent> {
++    threads
++        .get(&thread)
++        .map(|followed| effective(threads, followed))
++}
++
++/// Whether the guard follows `thread` and `model` is not its selection.
++pub(crate) fn other_than_selection(thread: ThreadId, model: &str) -> bool {
++    lock()
++        .get(&thread)
++        .is_some_and(|followed| !same_model(&followed.state.selected_model, model))
++}
++
++/// The state of a thread the guard follows.
++pub fn state(thread: ThreadId) -> Option<ModelGuardEvent> {
++    effective_of(&lock(), thread)
++}
++
++/// The user selected `model` for `thread`: it becomes the selection, and the
++/// holds of the thread and of every thread run on its behalf are lifted.
++/// Selecting the model already selected lifts them as well. A thread run on
++/// behalf of a thread that is still held stays held with it.
++pub fn select(thread: ThreadId, model: &str) -> Option<ModelGuardEvent> {
++    let mut threads = lock();
++    let followed = threads.get_mut(&thread)?;
++    followed.state.selected_model = model.to_owned();
++    followed.state.hold = None;
++    let released: Vec<ThreadId> = threads
++        .iter()
++        .filter(|(_, followed)| runs_on_behalf_of(&threads, followed, thread))
++        .map(|(id, _)| *id)
++        .collect();
++    for id in released {
++        if let Some(followed) = threads.get_mut(&id) {
++            followed.state.hold = None;
++        }
++    }
++    effective_of(&threads, thread)
++}
++
++/// Whether `followed` runs on behalf of `ancestor`, directly or through
++/// threads that run on its behalf.
++fn runs_on_behalf_of(threads: &Threads, followed: &Followed, ancestor: ThreadId) -> bool {
++    let mut runs_for = followed.runs_for;
++    // Each step goes to another followed thread, so the walk ends within the
++    // registry's size even on a malformed chain.
++    for _ in 0..threads.len() {
++        let Some(parent) = runs_for else {
++            return false;
++        };
++        if parent == ancestor {
++            return true;
++        }
++        runs_for = threads.get(&parent).and_then(|parent| parent.runs_for);
++    }
++    false
++}
++
++/// Holds `thread` for the opt-in reasoning heuristic, which the client
++/// measures, unless a stronger cause already holds it.
++pub fn hold_for_reasoning(thread: ThreadId, hits: u32) -> Option<ModelGuardEvent> {
++    hold(thread, ModelGuardHold::Reasoning { hits }).map(|(state, _)| state)
++}
++
++/// Admits a request for `requested` on `thread`. A held thread admits
++/// nothing, and a request for a model other than the selection holds it.
++/// The refusal carries the thread's state and whether it changed.
++pub(crate) fn admit(thread: ThreadId, requested: &str) -> Result<(), Refusal> {
++    let mut threads = lock();
++    let Some(state) = effective_of(&threads, thread) else {
++        return Ok(());
++    };
++    if state.hold.is_some() {
++        return Err(Refusal {
++            state,
++            changed: false,
++        });
++    }
++    if same_model(&state.selected_model, requested) {
++        return Ok(());
++    }
++    let cause = ModelGuardHold::Request {
++        selected: state.selected_model,
++        requested: requested.to_owned(),
++    };
++    match hold_locked(&mut threads, thread, cause) {
++        Some((state, changed)) => Err(Refusal { state, changed }),
++        None => Ok(()),
++    }
++}
++
++/// Refuses work a held thread starts outside a model request, such as a
++/// voice conversation.
++pub(crate) fn refuse_if_held(thread: ThreadId) -> Result<(), CodexErr> {
++    match state(thread) {
++        Some(state) if state.hold.is_some() => Err(held_error(&state)),
++        _ => Ok(()),
++    }
++}
++
++/// Stops following `thread`, whose session runs without the guard.
++pub(crate) fn forget(thread: ThreadId) {
++    lock().remove(&thread);
++}
++
++/// Checks a request that only prepares a later one (a connection warmup with
++/// `generate=false`). It is refused exactly when `admit` would refuse the
++/// request it prepares, but the refusal leaves the thread's state as it is:
++/// the prepared request is judged when it is made, against the selection in
++/// force then.
++pub(crate) fn admit_preparation(thread: ThreadId, requested: &str) -> Result<(), CodexErr> {
++    let Some(state) = state(thread) else {
++        return Ok(());
++    };
++    if state.hold.is_some() {
++        return Err(held_error(&state));
++    }
++    if same_model(&state.selected_model, requested) {
++        return Ok(());
++    }
++    Err(CodexErr::ModelGuardHeld(format!(
++        "Model Guard sends no warmup for {requested}: the selected model is {}.",
++        state.selected_model
++    )))
++}
++
++/// Judges what a response disclosed about the model that served a request
++/// for `requested`; the effective-model header outranks the body label. A
++/// disclosure of another model holds the thread; the result is its state and
++/// whether this disclosure changed it.
++pub(crate) fn observe(
++    thread: ThreadId,
++    requested: &str,
++    server_model: Option<&str>,
++    response_label: Option<&str>,
++) -> Option<(ModelGuardEvent, bool)> {
++    let cause = if let Some(actual) = server_model.filter(|actual| !same_model(actual, requested)) {
++        ModelGuardHold::Route {
++            requested: requested.to_owned(),
++            actual: actual.to_owned(),
++        }
++    } else if let Some(label) = response_label.filter(|label| !label_consistent(requested, label)) {
++        ModelGuardHold::Label {
++            requested: requested.to_owned(),
++            label: label.to_owned(),
++        }
++    } else {
++        return None;
++    };
++    hold(thread, cause)
++}
++
++/// A request Model Guard refused, with the thread's state.
++pub(crate) struct Refusal {
++    pub(crate) state: ModelGuardEvent,
++    /// The refusal itself held the thread.
++    pub(crate) changed: bool,
++}
++
++impl Refusal {
++    pub(crate) fn into_error(self) -> CodexErr {
++        held_error(&self.state)
++    }
++}
++
++/// The terminal error that ends a turn on a held thread.
++pub(crate) fn held_error(state: &ModelGuardEvent) -> CodexErr {
++    let cause = match &state.hold {
++        Some(ModelGuardHold::Request {
++            selected,
++            requested,
++        }) => format!("the request named {requested}, not the selected {selected}"),
++        Some(ModelGuardHold::Route { requested, actual }) => {
++            format!("the server reported {actual} for a request to {requested}")
++        }
++        Some(ModelGuardHold::Label { requested, label }) => {
++            format!("the response to a request for {requested} was labeled {label}")
++        }
++        Some(ModelGuardHold::Reasoning { hits }) => {
++            format!("{hits} of the last five responses had exactly 516 reasoning tokens")
++        }
++        None => format!("the selected model is {}", state.selected_model),
++    };
++    CodexErr::ModelGuardHeld(format!(
++        "Model Guard holds this thread: {cause}. Select a model with /model to continue."
++    ))
++}
++
++/// Applies `cause` to a followed thread unless an equal or stronger cause
++/// already holds it. Returns the state and whether it changed.
++fn hold(thread: ThreadId, cause: ModelGuardHold) -> Option<(ModelGuardEvent, bool)> {
++    hold_locked(&mut lock(), thread, cause)
++}
++
++fn hold_locked(
++    threads: &mut Threads,
++    thread: ThreadId,
++    cause: ModelGuardHold,
++) -> Option<(ModelGuardEvent, bool)> {
++    let followed = threads.get_mut(&thread)?;
++    let changed = followed
++        .state
++        .hold
++        .as_ref()
++        .is_none_or(|current| rank(current) < rank(&cause));
++    if changed {
++        followed.state.hold = Some(cause);
++    }
++    Some((effective_of(threads, thread)?, changed))
++}
++
++/// A request for another model outranks what the server disclosed, and
++/// disclosures outrank the heuristic.
++fn rank(hold: &ModelGuardHold) -> u8 {
++    match hold {
++        ModelGuardHold::Request { .. } => 3,
++        ModelGuardHold::Route { .. } => 2,
++        ModelGuardHold::Label { .. } => 1,
++        ModelGuardHold::Reasoning { .. } => 0,
++    }
++}
++
++fn same_model(left: &str, right: &str) -> bool {
++    left.eq_ignore_ascii_case(right)
++}
++
++/// Whether a response body's model label describes the requested model.
++///
++/// Equal identifiers agree, and so does one identifier extending the other
++/// at a separator (`gpt-6-astra` and `gpt-6-astra-2026-09-01`, or the bare
++/// family `gpt-6`). A size tier appended to the requested model names a
++/// different model. Everything else, including another family, differs.
++pub fn label_consistent(requested: &str, label: &str) -> bool {
++    const SIZE_TIERS: [&str; 7] = ["mini", "nano", "lite", "small", "fast", "flash", "turbo"];
++    const SEPARATORS: [char; 5] = ['-', '.', ':', '_', '@'];
++    let requested = requested.to_ascii_lowercase();
++    let label = label.to_ascii_lowercase();
++    if requested == label {
++        return true;
++    }
++    let extension = |short: &str, long: &str| {
++        long.strip_prefix(short)
++            .filter(|rest| rest.starts_with(SEPARATORS))
++            .map(|rest| rest[1..].to_owned())
++    };
++    match extension(&requested, &label) {
++        Some(rest) => !rest
++            .split(SEPARATORS)
++            .any(|part| SIZE_TIERS.contains(&part)),
++        None => extension(&label, &requested).is_some(),
++    }
++}
++
++fn lock() -> std::sync::MutexGuard<'static, Threads> {
++    THREADS
++        .lock()
++        .unwrap_or_else(std::sync::PoisonError::into_inner)
++}
++
++#[cfg(test)]
++#[path = "model_guard_tests.rs"]
++mod tests;
+diff --git a/codex-rs/core/src/model_guard_tests.rs b/codex-rs/core/src/model_guard_tests.rs
+new file mode 100644
+index 00000000..db0fac71
+--- /dev/null
++++ b/codex-rs/core/src/model_guard_tests.rs
+@@ -0,0 +1,274 @@
++use super::*;
++use pretty_assertions::assert_eq;
++
++fn user(thread: ThreadId, configured: Option<&str>, model: &str) -> ModelGuardEvent {
++    follow(
++        thread,
++        Origin::User {
++            configured: configured.map(str::to_owned),
++        },
++        model,
++    )
++}
++
++fn request_hold(selected: &str, requested: &str) -> Option<ModelGuardHold> {
++    Some(ModelGuardHold::Request {
++        selected: selected.into(),
++        requested: requested.into(),
++    })
++}
++
++#[test]
++fn a_thread_restored_on_another_model_is_held_from_the_start() {
++    let thread = ThreadId::new();
++    assert_eq!(
++        user(thread, Some("gpt-6-astra"), "gpt-reserve").hold,
++        request_hold("gpt-6-astra", "gpt-reserve")
++    );
++    // Following it again keeps what the process remembers.
++    assert_eq!(
++        user(thread, Some("gpt-6-sol"), "gpt-6-sol").selected_model,
++        "gpt-6-astra"
++    );
++    // Without a configured model the thread's own model is the selection.
++    let other = ThreadId::new();
++    assert_eq!(
++        user(other, None, "gpt-6-sol"),
++        ModelGuardEvent {
++            selected_model: "gpt-6-sol".into(),
++            hold: None,
++        }
++    );
++}
++
++#[test]
++fn admission_holds_a_request_for_another_model_and_then_admits_nothing() {
++    let thread = ThreadId::new();
++    user(thread, Some("gpt-6-astra"), "gpt-6-astra");
++    assert!(admit(thread, "GPT-6-ASTRA").is_ok());
++    let refusal = admit(thread, "gpt-reserve").unwrap_err();
++    assert!(refusal.changed);
++    assert_eq!(
++        refusal.state.hold,
++        request_hold("gpt-6-astra", "gpt-reserve")
++    );
++    // The held thread admits not even its selected model.
++    let refusal = admit(thread, "gpt-6-astra").unwrap_err();
++    assert!(!refusal.changed);
++    assert!(
++        refusal
++            .into_error()
++            .to_string()
++            .contains("the request named gpt-reserve, not the selected gpt-6-astra")
++    );
++    // A thread the guard does not follow is never refused.
++    assert!(admit(ThreadId::new(), "gpt-reserve").is_ok());
++}
++
++#[test]
++fn a_warmup_is_sent_only_for_the_selection_and_never_holds() {
++    let thread = ThreadId::new();
++    user(thread, Some("gpt-6-astra"), "gpt-6-astra");
++    assert!(admit_preparation(thread, "gpt-6-astra").is_ok());
++    assert!(admit_preparation(thread, "gpt-reserve").is_err());
++    assert_eq!(state(thread).and_then(|state| state.hold), None);
++    assert!(admit(thread, "gpt-6-astra").is_ok());
++    // A held thread prepares nothing, not even for its selection.
++    let held = ThreadId::new();
++    user(held, Some("gpt-6-astra"), "gpt-reserve");
++    assert!(admit_preparation(held, "gpt-6-astra").is_err());
++    assert!(admit_preparation(ThreadId::new(), "gpt-reserve").is_ok());
++}
++
++#[test]
++fn disclosures_hold_the_thread_in_rank_order() {
++    let thread = ThreadId::new();
++    user(thread, Some("gpt-6-astra"), "gpt-6-astra");
++    assert_eq!(
++        observe(
++            thread,
++            "gpt-6-astra",
++            Some("gpt-6-astra"),
++            Some("gpt-6-astra-2026-09-01")
++        ),
++        None
++    );
++    let (state, changed) = observe(thread, "gpt-6-astra", None, Some("gpt-6-astra-mini")).unwrap();
++    assert!(changed);
++    assert_eq!(
++        state.hold,
++        Some(ModelGuardHold::Label {
++            requested: "gpt-6-astra".into(),
++            label: "gpt-6-astra-mini".into(),
++        })
++    );
++    // A header outranks the label; the label alone again changes nothing.
++    let (state, changed) = observe(thread, "gpt-6-astra", Some("gpt-4o"), None).unwrap();
++    assert!(changed);
++    assert!(matches!(state.hold, Some(ModelGuardHold::Route { .. })));
++    let (_, changed) = observe(thread, "gpt-6-astra", None, Some("gpt-4o")).unwrap();
++    assert!(!changed);
++    // The heuristic never replaces a disclosure.
++    assert!(matches!(
++        hold_for_reasoning(thread, 3).unwrap().hold,
++        Some(ModelGuardHold::Route { .. })
++    ));
++}
++
++#[test]
++fn only_the_users_selection_lifts_a_hold() {
++    let thread = ThreadId::new();
++    user(thread, Some("gpt-6-astra"), "gpt-6-astra");
++    assert_eq!(
++        hold_for_reasoning(thread, 3).unwrap().hold,
++        Some(ModelGuardHold::Reasoning { hits: 3 })
++    );
++    assert!(admit(thread, "gpt-6-astra").is_err());
++    // Selecting the same model again counts.
++    assert_eq!(
++        select(thread, "gpt-6-astra"),
++        Some(ModelGuardEvent {
++            selected_model: "gpt-6-astra".into(),
++            hold: None,
++        })
++    );
++    assert!(admit(thread, "gpt-6-astra").is_ok());
++    select(thread, "gpt-6-sol");
++    assert!(other_than_selection(thread, "gpt-6-astra"));
++    assert!(!other_than_selection(thread, "gpt-6-sol"));
++    assert!(!other_than_selection(ThreadId::new(), "gpt-6-astra"));
++    assert_eq!(select(ThreadId::new(), "gpt-6-sol"), None);
++}
++
++#[test]
++fn forks_carry_their_parents_state_and_children_their_parents_hold() {
++    let parent = ThreadId::new();
++    user(parent, Some("gpt-6-astra"), "gpt-6-astra");
++    select(parent, "gpt-6-sol");
++    let fork = ThreadId::new();
++    let fork_state = follow(
++        fork,
++        Origin::Fork {
++            parent,
++            configured: Some("gpt-6-astra".into()),
++        },
++        "gpt-6-sol",
++    );
++    assert_eq!(fork_state.selected_model, "gpt-6-sol");
++    assert_eq!(fork_state.hold, None);
++    // A child runs on its own configured model.
++    let child = ThreadId::new();
++    assert_eq!(
++        follow(child, Origin::Child { parent }, "gpt-6-luna"),
++        ModelGuardEvent {
++            selected_model: "gpt-6-luna".into(),
++            hold: None,
++        }
++    );
++    // A fork or child of a held thread starts held.
++    let _ = admit(parent, "gpt-reserve");
++    let held_fork = follow(
++        ThreadId::new(),
++        Origin::Fork {
++            parent,
++            configured: None,
++        },
++        "gpt-6-sol",
++    );
++    assert_eq!(held_fork.hold, request_hold("gpt-6-sol", "gpt-reserve"));
++    let held_child = follow(ThreadId::new(), Origin::Child { parent }, "gpt-6-luna");
++    assert_eq!(held_child.selected_model, "gpt-6-luna");
++    assert_eq!(held_child.hold, request_hold("gpt-6-sol", "gpt-reserve"));
++    // A fork of a thread the process does not know uses the configured model.
++    let orphan = follow(
++        ThreadId::new(),
++        Origin::Fork {
++            parent: ThreadId::new(),
++            configured: Some("gpt-6-astra".into()),
++        },
++        "gpt-reserve",
++    );
++    assert_eq!(orphan.hold, request_hold("gpt-6-astra", "gpt-reserve"));
++}
++
++#[test]
++fn a_child_is_held_exactly_while_a_thread_it_runs_for_is_held() {
++    let parent = ThreadId::new();
++    user(parent, Some("gpt-6-astra"), "gpt-6-astra");
++    let child = ThreadId::new();
++    follow(child, Origin::Child { parent }, "gpt-6-luna");
++    let grandchild = ThreadId::new();
++    follow(grandchild, Origin::Child { parent: child }, "gpt-6-luna");
++    assert!(admit(grandchild, "gpt-6-luna").is_ok());
++
++    // A hold that comes to the parent later reaches every thread run for it.
++    let _ = observe(parent, "gpt-6-astra", Some("gpt-4o"), None);
++    let refusal = admit(grandchild, "gpt-6-luna").unwrap_err();
++    assert!(!refusal.changed);
++    assert!(matches!(
++        refusal.state.hold,
++        Some(ModelGuardHold::Route { .. })
++    ));
++    assert_eq!(
++        state(child).and_then(|state| state.hold),
++        state(parent).and_then(|state| state.hold)
++    );
++
++    // The user's selection on the parent releases them with it.
++    select(parent, "gpt-6-astra");
++    assert!(admit(child, "gpt-6-luna").is_ok());
++    assert!(admit(grandchild, "gpt-6-luna").is_ok());
++
++    // A child's own hold stays its own.
++    let _ = admit(child, "gpt-reserve");
++    assert!(admit(parent, "gpt-6-astra").is_ok());
++    assert!(admit(grandchild, "gpt-6-luna").is_err());
++
++    // A thread with no selection of its own is released by the user's
++    // selection on the thread it runs for; another thread's children are not.
++    let other = ThreadId::new();
++    user(other, Some("gpt-6-astra"), "gpt-6-astra");
++    let other_child = ThreadId::new();
++    follow(other_child, Origin::Child { parent: other }, "gpt-6-luna");
++    let _ = admit(other_child, "gpt-reserve");
++    select(parent, "gpt-6-astra");
++    assert!(admit(child, "gpt-6-luna").is_ok());
++    assert!(admit(grandchild, "gpt-6-luna").is_ok());
++    assert!(admit(other_child, "gpt-6-luna").is_err());
++}
++
++/// The same table holds the Python observer to the same rule.
++#[test]
++fn label_consistency_rule() {
++    for (requested, label, expected) in [
++        ("gpt-6-astra", "gpt-6-astra", true),
++        ("GPT-6-Astra", "gpt-6-astra", true),
++        ("gpt-6-astra", "gpt-6-astra-2026-09-01", true),
++        ("gpt-6-astra", "gpt-6", true),
++        ("gpt-5.6-sol", "gpt-5.6-sol-codex", true),
++        ("gpt-6-astra", "gpt-4o", false),
++        ("gpt-6-astra", "gpt-6-astra-mini", false),
++        ("gpt-6-astra", "gpt-6-astrax", false),
++        ("gpt-6-astra", "gpt-5.6-sol", false),
++    ] {
++        assert_eq!(
++            label_consistent(requested, label),
++            expected,
++            "{requested} vs {label}"
++        );
++    }
++}
++
++#[test]
++fn a_held_thread_starts_no_voice_conversation_and_a_disabled_one_is_forgotten() {
++    let thread = ThreadId::new();
++    user(thread, Some("gpt-6-astra"), "gpt-6-astra");
++    assert!(refuse_if_held(thread).is_ok());
++    let _ = admit(thread, "gpt-reserve");
++    assert!(refuse_if_held(thread).is_err());
++    // A session that runs without the guard leaves no hold behind.
++    forget(thread);
++    assert_eq!(state(thread), None);
++    assert!(refuse_if_held(thread).is_ok());
++    assert!(admit(thread, "gpt-reserve").is_ok());
++}
+diff --git a/codex-rs/core/src/realtime_conversation.rs b/codex-rs/core/src/realtime_conversation.rs
+index 007898db..4b50fe07 100644
+--- a/codex-rs/core/src/realtime_conversation.rs
++++ b/codex-rs/core/src/realtime_conversation.rs
+@@ -1263,7 +1263,11 @@ pub(crate) async fn handle_start(
+     sub_id: String,
+     params: ConversationStartParams,
+ ) -> CodexResult<()> {
+-    let prepared_start = match prepare_realtime_start(sess, params).await {
++    let prepared_start = match crate::model_guard::refuse_if_held(sess.thread_id()) {
++        Ok(()) => prepare_realtime_start(sess, params).await,
++        Err(err) => Err(err),
++    };
++    let prepared_start = match prepared_start {
+         Ok(prepared_start) => prepared_start,
+         Err(err) => {
+             error!("failed to prepare realtime conversation: {err}");
 diff --git a/codex-rs/core/src/session/session.rs b/codex-rs/core/src/session/session.rs
-index 263f08f2..57f17c83 100644
+index 263f08f2..19cbe2e1 100644
 --- a/codex-rs/core/src/session/session.rs
 +++ b/codex-rs/core/src/session/session.rs
-@@ -1799,6 +1799,7 @@ impl Session {
+@@ -887,6 +887,36 @@ impl Session {
+                 ));
+             }
+         };
++        if crate::model_guard::enabled(&config) {
++            // A sub-agent forked with its parent's history is still a child;
++            // a fork the user resumes is the user's thread.
++            let origin = match (parent_thread_id, forked_from_id, &initial_history) {
++                (Some(parent), _, _) => crate::model_guard::Origin::Child { parent },
++                (None, Some(parent), InitialHistory::Forked(_)) => {
++                    crate::model_guard::Origin::Fork {
++                        parent,
++                        configured: config.model.clone(),
++                    }
++                }
++                (_, _, InitialHistory::Resumed(_)) => crate::model_guard::Origin::User {
++                    configured: crate::model_guard::configured_model(&config)
++                        .or_else(|| config.model.clone()),
++                },
++                _ => crate::model_guard::Origin::User {
++                    configured: config.model.clone(),
++                },
++            };
++            crate::model_guard::follow(
++                thread_id,
++                origin,
++                session_configuration
++                    .step_settings
++                    .collaboration_mode
++                    .model(),
++            );
++        } else {
++            crate::model_guard::forget(thread_id);
++        }
+         let isolation = thread_extension_init
+             .get::<codex_extension_api::SessionIsolation>()
+             .map(|policy| *policy)
+@@ -1799,6 +1829,7 @@ impl Session {
                      tx_event.clone(),
                      codex_responses_headers,
                      crate::cyber_access_program::ApiKeyCyberAccessPrograms::from_config(&config),
@@ -385,53 +1450,77 @@ index 263f08f2..57f17c83 100644
                  executed_tool_calls: executed_tool_calls.clone(),
                  code_mode_service: crate::tools::code_mode::CodeModeService::new(
 diff --git a/codex-rs/core/src/session/turn.rs b/codex-rs/core/src/session/turn.rs
-index 64e8786a..3503b528 100644
+index 64e8786a..58dcdfe8 100644
 --- a/codex-rs/core/src/session/turn.rs
 +++ b/codex-rs/core/src/session/turn.rs
-@@ -2106,6 +2106,7 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<RealtimeEventTex
+@@ -1359,18 +1359,25 @@ async fn maybe_run_previous_model_inline_compact(
+     if !should_compact_for_comp_hash_change && previous_model == turn_context.model_info().slug {
+         return Ok(());
+     }
+-    let mut previous_model_turn_context = turn_context
+-        .with_model(previous_model.clone(), &sess.services.models_manager)
+-        .await;
+-    // `with_model` preserves the current turn's access program. Restore the previous
+-    // turn's program so compaction uses the same model/cyber_access_program pair as that turn.
+-    // Combining the previous model with the current turn's program can produce a pair
+-    // that the server rejects.
+-    previous_model_turn_context.cyber_access_program = cyber_access_program::for_provider(
+-        &previous_model_turn_context.config.model_provider_id,
+-        previous_turn_settings.cyber_access_program,
+-    );
+-    let previous_model_turn_context = Arc::new(previous_model_turn_context);
++    // Model Guard holds the thread to the selected model, so the current
++    // model summarizes a history written by any other one.
++    let previous_model_turn_context =
++        if crate::model_guard::other_than_selection(sess.thread_id(), &previous_model) {
++            Arc::clone(turn_context)
++        } else {
++            let mut previous_model_turn_context = turn_context
++                .with_model(previous_model.clone(), &sess.services.models_manager)
++                .await;
++            // `with_model` preserves the current turn's access program. Restore the previous
++            // turn's program so compaction uses the same model/cyber_access_program pair as that turn.
++            // Combining the previous model with the current turn's program can produce a pair
++            // that the server rejects.
++            previous_model_turn_context.cyber_access_program = cyber_access_program::for_provider(
++                &previous_model_turn_context.config.model_provider_id,
++                previous_turn_settings.cyber_access_program,
++            );
++            Arc::new(previous_model_turn_context)
++        };
+ 
+     let reason = if should_compact_for_comp_hash_change {
+         CompactionReason::CompHashChanged
+@@ -2106,6 +2113,8 @@ pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<RealtimeEventTex
          | EventMsg::RealtimeConversationRealtime(_)
          | EventMsg::RealtimeConversationClosed(_)
          | EventMsg::ModelReroute(_)
 +        | EventMsg::ModelRouting(_)
++        | EventMsg::ModelGuard(_)
          | EventMsg::ModelVerification(_)
          | EventMsg::TurnModerationMetadata(_)
          | EventMsg::SafetyBuffering(_)
-@@ -2576,6 +2577,7 @@ async fn try_run_sampling_request(
-     if cancellation_token.is_cancelled() {
-         return Err(CodexErr::TurnAborted);
-     }
-+    let mut routing = stream.request_metadata.take();
-     let mut in_flight: FuturesOrdered<InFlightFuture<'static>> = FuturesOrdered::new();
-     let mut needs_follow_up = false;
-     let mut last_agent_message: Option<String> = None;
-@@ -2889,6 +2891,11 @@ async fn try_run_sampling_request(
-                 }
-             }
-             ResponseEvent::ServerModel(server_model) => {
-+                if let Some(routing) = routing.as_mut() {
-+                    routing.server_model = Some(server_model.clone());
-+                    sess.send_event(&turn_context, EventMsg::ModelRouting(routing.clone()))
-+                        .await;
-+                }
-                 if !turn_context
-                     .server_model_warning_emitted
-                     .load(Ordering::Relaxed)
-@@ -2901,6 +2908,15 @@ async fn try_run_sampling_request(
+@@ -2901,6 +2910,7 @@ async fn try_run_sampling_request(
                          .store(true, Ordering::Relaxed);
                  }
              }
-+            ResponseEvent::ResponseModelLabel(label) => {
-+                if let Some(routing) = routing.as_mut()
-+                    && routing.response_label.as_deref() != Some(label.as_str())
-+                {
-+                    routing.response_label = Some(label);
-+                    sess.send_event(&turn_context, EventMsg::ModelRouting(routing.clone()))
-+                        .await;
-+                }
-+            }
++            ResponseEvent::ResponseModelLabel(_) => {}
              ResponseEvent::ModelVerifications(verifications) => {
                  if !turn_context
                      .model_verification_emitted
+diff --git a/codex-rs/core/src/tasks/review.rs b/codex-rs/core/src/tasks/review.rs
+index 24359222..4b8efb71 100644
+--- a/codex-rs/core/src/tasks/review.rs
++++ b/codex-rs/core/src/tasks/review.rs
+@@ -164,6 +164,8 @@ async fn process_review_events(
+                 ..
+             })
+             | EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent { .. }) => {}
++            // The review thread's Model Guard state is its own, not the parent's.
++            EventMsg::ModelGuard(_) => {}
+             EventMsg::TurnComplete(task_complete) => {
+                 // Parse review output from the last agent message (if present).
+                 let out = task_complete
 diff --git a/codex-rs/core/src/turn_timing.rs b/codex-rs/core/src/turn_timing.rs
 index 75a2bf9b..a53e7c41 100644
 --- a/codex-rs/core/src/turn_timing.rs
@@ -445,10 +1534,15 @@ index 75a2bf9b..a53e7c41 100644
          | ResponseEvent::TurnModerationMetadata(_)
          | ResponseEvent::SafetyBuffering(_)
 diff --git a/codex-rs/core/tests/suite/mod.rs b/codex-rs/core/tests/suite/mod.rs
-index dada4238..fe5d5444 100644
+index dada4238..97a34034 100644
 --- a/codex-rs/core/tests/suite/mod.rs
 +++ b/codex-rs/core/tests/suite/mod.rs
-@@ -144,6 +144,7 @@ mod model_overrides;
+@@ -140,10 +140,12 @@ mod mcp_tool_cache;
+ mod mcp_tool_exposure;
+ mod mcp_turn_metadata;
+ mod mcp_user_verification;
++mod model_guard;
+ mod model_overrides;
  #[path = "model_provider_requirements_tests.rs"]
  mod model_provider_requirements;
  mod model_request;
@@ -456,6 +1550,270 @@ index dada4238..fe5d5444 100644
  mod model_runtime_selectors;
  mod model_switching;
  mod model_visible_layout;
+diff --git a/codex-rs/core/tests/suite/model_guard.rs b/codex-rs/core/tests/suite/model_guard.rs
+new file mode 100644
+index 00000000..76ec185e
+--- /dev/null
++++ b/codex-rs/core/tests/suite/model_guard.rs
+@@ -0,0 +1,258 @@
++//! Model Guard holds a thread at the point every model request passes: a held
++//! thread sends nothing, whoever starts its turn.
++use std::sync::Arc;
++
++use anyhow::Result;
++use codex_core::TurnInputRequest;
++use codex_core::compact::SUMMARIZATION_PROMPT;
++use codex_core::model_guard;
++use codex_login::CodexAuth;
++use codex_model_provider_info::built_in_model_providers;
++use codex_protocol::ThreadId;
++use codex_protocol::config_types::CollaborationMode;
++use codex_protocol::config_types::ModeKind;
++use codex_protocol::config_types::Settings;
++use codex_protocol::protocol::EventMsg;
++use codex_protocol::protocol::ModelGuardEvent;
++use codex_protocol::protocol::ModelGuardHold;
++use codex_protocol::protocol::ThreadSettingsOverrides;
++use codex_protocol::user_input::UserInput;
++use core_test_support::responses::ev_assistant_message;
++use core_test_support::responses::ev_completed;
++use core_test_support::responses::ev_response_created;
++use core_test_support::responses::mount_response_once;
++use core_test_support::responses::sse;
++use core_test_support::responses::sse_response;
++use core_test_support::responses::start_mock_server;
++use core_test_support::responses::start_websocket_server;
++use core_test_support::skip_if_no_network;
++use core_test_support::test_codex::TestCodex;
++use core_test_support::test_codex::test_codex;
++use core_test_support::wait_for_event;
++use pretty_assertions::assert_eq;
++use tempfile::TempDir;
++use wiremock::MockServer;
++
++const SELECTED: &str = "gpt-6-astra";
++
++fn guarded_home() -> Result<Arc<TempDir>> {
++    let home = TempDir::new()?;
++    std::fs::write(
++        home.path().join("config.toml"),
++        "[features]\nplugins = true\n\n[plugins.\"model-guard@test\"]\nenabled = true\n",
++    )?;
++    Ok(Arc::new(home))
++}
++
++fn turn(text: &str, model: Option<&str>) -> TurnInputRequest {
++    let request = TurnInputRequest::user_input(vec![UserInput::Text {
++        text: text.into(),
++        text_elements: Vec::new(),
++    }]);
++    match model {
++        Some(model) => request.with_thread_settings(ThreadSettingsOverrides {
++            collaboration_mode: Some(CollaborationMode {
++                mode: ModeKind::Default,
++                settings: Settings {
++                    model: model.to_owned(),
++                    reasoning_effort: None,
++                    developer_instructions: None,
++                },
++            }),
++            ..Default::default()
++        }),
++        None => request,
++    }
++}
++
++/// Runs a turn to its end; returns the guard states and errors it reported.
++async fn run(
++    test: &TestCodex,
++    request: TurnInputRequest,
++) -> Result<(Vec<ModelGuardEvent>, Vec<String>)> {
++    test.codex.start_or_steer_turn(request).await?;
++    let (mut states, mut errors) = (Vec::new(), Vec::new());
++    loop {
++        match wait_for_event(&test.codex, |_| true).await {
++            EventMsg::ModelGuard(state) => states.push(state),
++            EventMsg::Error(error) => errors.push(error.message),
++            EventMsg::TurnComplete(_) => break,
++            _ => {}
++        }
++    }
++    Ok((states, errors))
++}
++
++async fn model_requests(server: &MockServer) -> Vec<String> {
++    server
++        .received_requests()
++        .await
++        .unwrap_or_default()
++        .iter()
++        .filter(|request| request.url.path().ends_with("/responses"))
++        .filter_map(|request| {
++            serde_json::from_slice::<serde_json::Value>(&request.body)
++                .ok()?
++                .get("model")?
++                .as_str()
++                .map(str::to_owned)
++        })
++        .collect()
++}
++
++fn ok_response(id: &str) -> wiremock::ResponseTemplate {
++    sse_response(sse(vec![
++        ev_assistant_message(&format!("{id}-message"), "OK"),
++        ev_completed(id),
++    ]))
++}
++
++fn thread(test: &TestCodex) -> ThreadId {
++    test.session_configured.thread_id
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn a_response_from_another_model_holds_the_thread_until_the_user_selects() -> Result<()> {
++    let server = start_mock_server().await;
++    mount_response_once(
++        &server,
++        ok_response("first").insert_header("OpenAI-Model", "gpt-4o"),
++    )
++    .await;
++    let test = test_codex()
++        .with_home(guarded_home()?)
++        .with_model(SELECTED)
++        .build_with_auto_env(&server)
++        .await?;
++
++    let (states, errors) = run(&test, turn("First.", None)).await?;
++    assert_eq!(
++        states.last().and_then(|state| state.hold.clone()),
++        Some(ModelGuardHold::Route {
++            requested: SELECTED.into(),
++            actual: "gpt-4o".into(),
++        })
++    );
++    assert!(
++        errors
++            .iter()
++            .any(|error| error.contains("Model Guard holds this thread"))
++    );
++
++    // The held thread sends nothing: not the user's next turn.
++    let (_, errors) = run(&test, turn("Second.", None)).await?;
++    assert!(!errors.is_empty());
++    assert_eq!(model_requests(&server).await, [SELECTED]);
++
++    // Selecting the model, even the same one, is the way out.
++    model_guard::select(thread(&test), SELECTED);
++    mount_response_once(&server, ok_response("third")).await;
++    let (states, errors) = run(&test, turn("Third.", None)).await?;
++    assert_eq!((states, errors), (Vec::new(), Vec::new()));
++    assert_eq!(model_requests(&server).await, [SELECTED, SELECTED]);
++    Ok(())
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn a_request_for_another_model_is_never_sent() -> Result<()> {
++    let server = start_mock_server().await;
++    let test = test_codex()
++        .with_home(guarded_home()?)
++        .with_model(SELECTED)
++        .build_with_auto_env(&server)
++        .await?;
++    // The thread runs one model while the user's selection is another.
++    model_guard::select(thread(&test), "gpt-6-sol");
++
++    let (states, errors) = run(&test, turn("Hello.", None)).await?;
++    assert_eq!(
++        states.last().and_then(|state| state.hold.clone()),
++        Some(ModelGuardHold::Request {
++            selected: "gpt-6-sol".into(),
++            requested: SELECTED.into(),
++        })
++    );
++    assert!(
++        errors
++            .iter()
++            .any(|error| error.contains("not the selected gpt-6-sol"))
++    );
++    assert!(model_requests(&server).await.is_empty());
++    Ok(())
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn a_held_thread_sends_nothing_over_websockets() -> Result<()> {
++    skip_if_no_network!(Ok(()));
++    let server = start_websocket_server(vec![vec![
++        vec![ev_response_created("warm"), ev_completed("warm")],
++        vec![
++            ev_response_created("first"),
++            ev_assistant_message("first-message", "OK"),
++            ev_completed("first"),
++        ],
++    ]])
++    .await;
++    let test = test_codex()
++        .with_home(guarded_home()?)
++        .build_with_websocket_server(&server)
++        .await?;
++    let model = test.session_configured.model.clone();
++
++    let (states, errors) = run(&test, turn("First.", None)).await?;
++    assert_eq!((states, errors), (Vec::new(), Vec::new()));
++
++    // The thread runs one model while the user's selection is another.
++    model_guard::select(thread(&test), "gpt-6-sol");
++    let (_, errors) = run(&test, turn("Second.", None)).await?;
++    assert!(
++        errors
++            .iter()
++            .any(|error| error.contains("not the selected gpt-6-sol"))
++    );
++    let generated: Vec<String> = server
++        .connections()
++        .iter()
++        .flatten()
++        .map(|request| request.body_json())
++        .filter(|body| body["generate"].as_bool() != Some(false))
++        .filter_map(|body| body["model"].as_str().map(str::to_owned))
++        .collect();
++    assert_eq!(generated, [model]);
++    server.shutdown().await;
++    Ok(())
++}
++
++#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
++async fn the_selected_model_summarizes_a_history_another_model_wrote() -> Result<()> {
++    let server = start_mock_server().await;
++    let (previous, next) = ("gpt-6-luna", SELECTED);
++    // A provider without remote compaction, so the summary is an ordinary request.
++    let mut provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
++    provider.name = "OpenAI (test)".into();
++    provider.base_url = Some(format!("{}/v1", server.uri()));
++    provider.supports_websockets = false;
++    let test = test_codex()
++        .with_home(guarded_home()?)
++        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
++        .with_model_info_override(next, |model| model.comp_hash = Some("hash-b".into()))
++        .with_model_info_override(previous, |model| model.comp_hash = Some("hash-a".into()))
++        .with_config(move |config| {
++            config.model_provider = provider;
++            config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_owned());
++        })
++        .build(&server)
++        .await?;
++    mount_response_once(&server, ok_response("before")).await;
++    run(&test, turn("Before.", None)).await?;
++
++    // The user leaves the previous model; Codex compacts before the first
++    // turn on the new one, with the new one.
++    model_guard::select(thread(&test), next);
++    mount_response_once(&server, ok_response("summary")).await;
++    mount_response_once(&server, ok_response("after")).await;
++    let (states, errors) = run(&test, turn("After.", Some(next))).await?;
++    assert_eq!((states, errors), (Vec::new(), Vec::new()));
++    assert_eq!(model_requests(&server).await, [previous, next, next]);
++    Ok(())
++}
 diff --git a/codex-rs/core/tests/suite/model_routing.rs b/codex-rs/core/tests/suite/model_routing.rs
 new file mode 100644
 index 00000000..409284bf
@@ -567,21 +1925,56 @@ index 53dbe317..f60fef0c 100644
              ResponseEvent::ModelVerifications(_) => "model_verifications".into(),
              ResponseEvent::TurnModerationMetadata(_) => "turn_moderation_metadata".into(),
              ResponseEvent::SafetyBuffering(_) => "safety_buffering".into(),
+diff --git a/codex-rs/protocol/src/error.rs b/codex-rs/protocol/src/error.rs
+index 9e44430d..acaf2565 100644
+--- a/codex-rs/protocol/src/error.rs
++++ b/codex-rs/protocol/src/error.rs
+@@ -190,6 +190,10 @@ pub enum CodexErrorDetails {
+     RefreshTokenFailed(RefreshTokenFailedError),
+     #[error("Fatal error: {0}")]
+     Fatal(String),
++    /// Model Guard refused a model request, or ended a response disclosing
++    /// another model. The thread stays held until the user selects a model.
++    #[error("{0}")]
++    ModelGuardHeld(String),
+     // -----------------------------------------------------------------
+     // Automatic conversions for common external error types
+     // -----------------------------------------------------------------
+@@ -362,6 +366,7 @@ impl CodexErr {
+         UnsupportedOperation(message: String),
+         RefreshTokenFailed(error: RefreshTokenFailedError),
+         Fatal(message: String),
++        ModelGuardHeld(message: String),
+         Io(error: io::Error),
+         Json(error: serde_json::Error),
+         #[cfg(target_os = "linux")]
+@@ -401,6 +406,7 @@ impl CodexErr {
+             | CodexErrorDetails::Interrupted
+             | CodexErrorDetails::EnvVar(_)
+             | CodexErrorDetails::Fatal(_)
++            | CodexErrorDetails::ModelGuardHeld(_)
+             | CodexErrorDetails::UsageNotIncluded
+             | CodexErrorDetails::QuotaExceeded
+             | CodexErrorDetails::InvalidImageRequest()
 diff --git a/codex-rs/protocol/src/protocol.rs b/codex-rs/protocol/src/protocol.rs
-index 841c794d..97c15929 100644
+index 841c794d..c5a63a41 100644
 --- a/codex-rs/protocol/src/protocol.rs
 +++ b/codex-rs/protocol/src/protocol.rs
-@@ -1403,6 +1403,9 @@ pub enum EventMsg {
+@@ -1403,6 +1403,13 @@ pub enum EventMsg {
      /// Model routing changed from the requested model to a different model.
      ModelReroute(ModelRerouteEvent),
  
 +    /// Per-request routing disclosure, independent of account verification policy.
 +    ModelRouting(ModelRoutingEvent),
 +
++    /// Model Guard's state for this thread: the selected model and why the
++    /// thread is held, if it is.
++    ModelGuard(ModelGuardEvent),
++
      /// Backend recommends additional account verification for this turn.
      ModelVerification(ModelVerificationEvent),
  
-@@ -2140,6 +2143,23 @@ pub struct ModelRerouteEvent {
+@@ -2140,6 +2147,44 @@ pub struct ModelRerouteEvent {
      pub reason: ModelRerouteReason,
  }
  
@@ -602,38 +1995,62 @@ index 841c794d..97c15929 100644
 +    pub service_tier: Option<String>,
 +}
 +
++/// Model Guard's state for a thread. `selected_model` is the model the user
++/// selected; while `hold` is set, the thread sends no model request.
++#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
++pub struct ModelGuardEvent {
++    pub selected_model: String,
++    pub hold: Option<ModelGuardHold>,
++}
++
++/// Why Model Guard holds a thread, in rank order: a request for a model other
++/// than the selection, an effective-model header naming another model, a
++/// response body labeled with another model, the opt-in reasoning heuristic.
++#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
++#[serde(tag = "type", rename_all = "snake_case")]
++#[ts(tag = "type", rename_all = "snake_case")]
++pub enum ModelGuardHold {
++    Request { selected: String, requested: String },
++    Route { requested: String, actual: String },
++    Label { requested: String, label: String },
++    Reasoning { hits: u32 },
++}
++
  #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
  #[serde(rename_all = "snake_case")]
  #[ts(rename_all = "snake_case")]
 diff --git a/codex-rs/rollout-trace/src/protocol_event.rs b/codex-rs/rollout-trace/src/protocol_event.rs
-index b5e23153..a6651bb7 100644
+index b5e23153..a46c86f4 100644
 --- a/codex-rs/rollout-trace/src/protocol_event.rs
 +++ b/codex-rs/rollout-trace/src/protocol_event.rs
-@@ -363,6 +363,7 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
+@@ -363,6 +363,8 @@ pub(crate) fn tool_runtime_trace_event(event: &EventMsg) -> Option<ToolRuntimeTr
          | EventMsg::RealtimeConversationClosed(_)
          | EventMsg::RealtimeConversationSdp(_)
          | EventMsg::ModelReroute(_)
 +        | EventMsg::ModelRouting(_)
++        | EventMsg::ModelGuard(_)
          | EventMsg::ModelVerification(_)
          | EventMsg::TurnModerationMetadata(_)
          | EventMsg::ContextCompacted(_)
-@@ -444,6 +445,7 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
+@@ -444,6 +446,8 @@ pub(crate) fn wrapped_protocol_event_type(event: &EventMsg) -> Option<&'static s
          | EventMsg::RealtimeConversationClosed(_)
          | EventMsg::RealtimeConversationSdp(_)
          | EventMsg::ModelReroute(_)
 +        | EventMsg::ModelRouting(_)
++        | EventMsg::ModelGuard(_)
          | EventMsg::ModelVerification(_)
          | EventMsg::TurnModerationMetadata(_)
          | EventMsg::ContextCompacted(_)
 diff --git a/codex-rs/rollout/src/policy.rs b/codex-rs/rollout/src/policy.rs
-index a6507682..618a062a 100644
+index a6507682..665e4807 100644
 --- a/codex-rs/rollout/src/policy.rs
 +++ b/codex-rs/rollout/src/policy.rs
-@@ -180,6 +180,7 @@ fn persisted_event_msg(
+@@ -180,6 +180,8 @@ fn persisted_event_msg(
          | EventMsg::RealtimeConversationClosed(_)
          | EventMsg::SafetyBuffering(_)
          | EventMsg::ModelReroute(_)
 +        | EventMsg::ModelRouting(_)
++        | EventMsg::ModelGuard(_)
          | EventMsg::ModelVerification(_)
          | EventMsg::TurnModerationMetadata(_)
          | EventMsg::AgentReasoningSectionBreak(_)

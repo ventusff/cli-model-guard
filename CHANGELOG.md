@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.13.0 — 2026-10-14
+
+- **Codex: the guard decides where Codex makes model requests.** A held thread sends no model request at all, whoever starts its turn: your prompt, `/compact`, a review, a queued command, a goal continuing on its own, a message from another thread, a voice handoff. A request for a model other than your selection is refused before it is sent, a response that discloses another model is cut off there, and the turn ends with a red error; an active goal stops instead of continuing. The hold belongs to the thread in the Codex process that hosts it, so switching threads, forks, side conversations, and quitting and resuming keep it; reviews, sub-agents and approval reviews run on their configured model and start held while the thread they work for is held.
+- **Codex: leaving a model never sends it another request.** The summary Codex writes of the history before the first turn on a newly selected model is made with that model, so moving off `gpt-reserve` works on the first try.
+- **Codex: every manual choice of model counts.** The picker's "this session only" choice and a confirmed retry on a faster model select the model like `/model`; selecting the model the thread already uses lifts a hold as before.
+- Codex: the footer takes the account email from Codex's own account read, which discards replies that a newer account change made obsolete.
+
 ## 1.12.0 — 2026-10-14
 
 - **Codex: native build moved to official Codex 0.162.1** (`092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`): the source patches are rebased and the package ships that release's helpers.
