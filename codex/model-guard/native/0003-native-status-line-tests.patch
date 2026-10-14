@@ -1,9 +1,9 @@
 diff --git a/codex-rs/tui/src/chatwidget/model_guard_tests.rs b/codex-rs/tui/src/chatwidget/model_guard_tests.rs
 new file mode 100644
-index 00000000..7fceb9ee
+index 00000000..e191e4d0
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/model_guard_tests.rs
-@@ -0,0 +1,953 @@
+@@ -0,0 +1,928 @@
 +use super::*;
 +use crate::bottom_pane::StatusLineItem;
 +use crate::chatwidget::tests::Op;
@@ -24,20 +24,7 @@ index 00000000..7fceb9ee
 +    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Max));
 +    chat.thread_id = Some(ThreadId::new());
 +    chat.model_guard = Some(guard());
-+    let start = ServerNotification::TurnStarted(TurnStartedNotification {
-+        thread_id: chat.thread_id.unwrap().to_string(),
-+        turn: Turn {
-+            id: "turn-1".into(),
-+            items: Vec::new(),
-+            items_view: Default::default(),
-+            status: TurnStatus::InProgress,
-+            error: None,
-+            started_at: None,
-+            completed_at: None,
-+            duration_ms: None,
-+        },
-+    });
-+    chat.observe_model_guard(&start, /*replay_kind*/ None);
++    chat.observe_model_guard(&started(&chat, "turn-1"), /*replay_kind*/ None);
 +    chat.observe_model_guard(&route(&chat, None), None);
 +    chat
 +}
@@ -299,20 +286,7 @@ index 00000000..7fceb9ee
 +    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Ultra));
 +    for index in 0..5 {
 +        let turn_id = format!("wire-turn-{index}");
-+        let start = ServerNotification::TurnStarted(TurnStartedNotification {
-+            thread_id: chat.thread_id.unwrap().to_string(),
-+            turn: Turn {
-+                id: turn_id.clone(),
-+                items: Vec::new(),
-+                items_view: Default::default(),
-+                status: TurnStatus::InProgress,
-+                error: None,
-+                started_at: None,
-+                completed_at: None,
-+                duration_ms: None,
-+            },
-+        });
-+        chat.observe_model_guard(&start, None);
++        chat.observe_model_guard(&started(&chat, &turn_id), None);
 +        let mut metadata = route(&chat, None);
 +        if let ServerNotification::ModelRoutingUpdated(n) = &mut metadata {
 +            n.turn_id = turn_id.clone();
@@ -335,6 +309,7 @@ index 00000000..7fceb9ee
 +        thread_id: chat.thread_id.unwrap().to_string(),
 +        turn: Turn {
 +            id: turn_id.into(),
++            root_turn_id: None,
 +            items: Vec::new(),
 +            items_view: Default::default(),
 +            status: TurnStatus::InProgress,

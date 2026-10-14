@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.12.0 — 2026-10-14
+
+- **Codex: native build moved to official Codex 0.162.1** (`092d3acd6bec3e3a14bdc7e7a2810ab628ab759d`): the source patches are rebased and the package ships that release's helpers.
+
 ## 1.11.1 — 2026-09-28
 
 - **Codex: the account email is back on the footer.** Codex sends an account-updated notification at startup that names only the auth mode and plan, and the widget replaced the bootstrap's account display (with the email) by that email-less one, so the footer read `Pro (More)` without the login. The build now reads the account back after every such notification and puts the email into the display, which also restores it in `/status`.

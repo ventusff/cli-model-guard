@@ -1,8 +1,8 @@
 diff --git a/codex-rs/tui/src/app/app_server_event_targets.rs b/codex-rs/tui/src/app/app_server_event_targets.rs
-index eb5ffa6e..0d35661a 100644
+index 9e5b60bd..2461c33e 100644
 --- a/codex-rs/tui/src/app/app_server_event_targets.rs
 +++ b/codex-rs/tui/src/app/app_server_event_targets.rs
-@@ -136,6 +136,9 @@ pub(super) fn server_notification_thread_target(
+@@ -139,6 +139,9 @@ pub(super) fn server_notification_thread_target(
          }
          ServerNotification::ContextCompacted(notification) => Some(notification.thread_id.as_str()),
          ServerNotification::ModelRerouted(notification) => Some(notification.thread_id.as_str()),
@@ -13,11 +13,11 @@ index eb5ffa6e..0d35661a 100644
              Some(notification.thread_id.as_str())
          }
 diff --git a/codex-rs/tui/src/app/app_server_events.rs b/codex-rs/tui/src/app/app_server_events.rs
-index cf6e42e3..83cc8bd8 100644
+index 560f5d56..72872276 100644
 --- a/codex-rs/tui/src/app/app_server_events.rs
 +++ b/codex-rs/tui/src/app/app_server_events.rs
-@@ -327,6 +327,15 @@ impl App {
-                         .is_some_and(AuthMode::has_chatgpt_account),
+@@ -373,6 +373,15 @@ impl App {
+                     has_chatgpt_account,
                      has_codex_backend_auth,
                  );
 +                if has_codex_backend_auth {
@@ -30,10 +30,10 @@ index cf6e42e3..83cc8bd8 100644
 +                    });
 +                }
                  if self.chat_widget.has_chatgpt_account() {
-                     crate::daybreak::prefetch_notice(
-                         &self.config,
+                     self.refresh_account_email(app_server_client);
+                     crate::security_setup::prefetch(
 diff --git a/codex-rs/tui/src/app/background_requests.rs b/codex-rs/tui/src/app/background_requests.rs
-index 2219ee0e..b863f6f4 100644
+index 69f2aeb4..1cbccfb4 100644
 --- a/codex-rs/tui/src/app/background_requests.rs
 +++ b/codex-rs/tui/src/app/background_requests.rs
 @@ -15,7 +15,10 @@ use codex_app_server_protocol::AppsListParams;
@@ -47,7 +47,7 @@ index 2219ee0e..b863f6f4 100644
  use codex_app_server_protocol::GetAccountTokenUsageParams;
  use codex_app_server_protocol::GetAccountTokenUsageResponse;
  use codex_app_server_protocol::MarketplaceAddParams;
-@@ -783,6 +786,26 @@ pub(super) async fn fetch_all_mcp_server_statuses(
+@@ -812,6 +815,26 @@ pub(super) async fn fetch_all_mcp_server_statuses(
      Ok(statuses)
  }
  
@@ -75,10 +75,10 @@ index 2219ee0e..b863f6f4 100644
      request_handle: AppServerRequestHandle,
      origin: RateLimitRefreshOrigin,
 diff --git a/codex-rs/tui/src/app/config_persistence.rs b/codex-rs/tui/src/app/config_persistence.rs
-index d04b7457..d00fa42b 100644
+index 5e8bf63e..f0263666 100644
 --- a/codex-rs/tui/src/app/config_persistence.rs
 +++ b/codex-rs/tui/src/app/config_persistence.rs
-@@ -1008,6 +1008,7 @@ impl App {
+@@ -1087,6 +1087,7 @@ impl App {
              self.config.model = Some(model.to_string());
              self.config.model_reasoning_effort = Some(default_effort.clone());
          }
@@ -87,10 +87,10 @@ index d04b7457..d00fa42b 100644
          self.chat_widget.set_reasoning_effort(Some(effort.clone()));
          self.chat_widget
 diff --git a/codex-rs/tui/src/app/event_dispatch.rs b/codex-rs/tui/src/app/event_dispatch.rs
-index 2c9303f5..cd10cb3b 100644
+index 2979e0a9..4aa56de4 100644
 --- a/codex-rs/tui/src/app/event_dispatch.rs
 +++ b/codex-rs/tui/src/app/event_dispatch.rs
-@@ -999,6 +999,12 @@ impl App {
+@@ -1058,6 +1058,12 @@ impl App {
                      return Ok(AppRunControl::Continue);
                  }
                  if self.active_thread_id == self.chat_widget.thread_id() {
@@ -103,7 +103,7 @@ index 2c9303f5..cd10cb3b 100644
                      if matches!(&op, AppCommand::UserTurn { .. })
                          && self.chat_widget.defer_pending_turn_for_luna_reserve()
                      {
-@@ -1575,6 +1581,14 @@ impl App {
+@@ -1721,6 +1727,14 @@ impl App {
              AppEvent::RefreshRateLimits { origin } => {
                  self.refresh_rate_limits(app_server, origin);
              }
@@ -118,7 +118,7 @@ index 2c9303f5..cd10cb3b 100644
              AppEvent::ApplyBackendBannerFallback { thread_id } => {
                  if self.active_thread_id == Some(thread_id)
                      && self.chat_widget.thread_id() == Some(thread_id)
-@@ -1923,6 +1937,7 @@ impl App {
+@@ -2069,6 +2083,7 @@ impl App {
                  {
                      return Ok(AppRunControl::Continue);
                  }
@@ -127,19 +127,19 @@ index 2c9303f5..cd10cb3b 100644
                      || self.chat_widget.current_collaboration_mode().model() != model;
                  if model_changed {
 diff --git a/codex-rs/tui/src/app/session_lifecycle.rs b/codex-rs/tui/src/app/session_lifecycle.rs
-index 0b0089f0..8d9f839b 100644
+index 61550ab9..09cc72c0 100644
 --- a/codex-rs/tui/src/app/session_lifecycle.rs
 +++ b/codex-rs/tui/src/app/session_lifecycle.rs
-@@ -519,6 +519,7 @@ impl App {
-             AppServerTarget::LocalDaemon { .. }
+@@ -520,6 +520,7 @@ impl App {
          ));
          chat_widget.inherit_backend_banner_state(&mut self.chat_widget);
+         chat_widget.inherit_security_setup(&mut self.chat_widget);
 +        chat_widget.inherit_model_guard(&self.chat_widget);
          for (thread_id, entry) in self.agent_navigation.ordered_threads() {
              chat_widget.set_collab_agent_metadata(
                  thread_id,
 diff --git a/codex-rs/tui/src/app/thread_routing.rs b/codex-rs/tui/src/app/thread_routing.rs
-index a3501c3a..533af137 100644
+index 9a6adc01..9cf4f5c9 100644
 --- a/codex-rs/tui/src/app/thread_routing.rs
 +++ b/codex-rs/tui/src/app/thread_routing.rs
 @@ -6,6 +6,7 @@
@@ -150,7 +150,7 @@ index a3501c3a..533af137 100644
  use crate::app_event::ThreadTitleDestination;
  use crate::chatwidget::ThreadInputStateRestoreMode;
  use codex_app_server_protocol::ThreadStartedNotification;
-@@ -1262,6 +1263,12 @@ impl App {
+@@ -1298,6 +1299,12 @@ impl App {
                  guard.push_notification_ref(&notification);
                  Some(notification)
              } else {
@@ -164,10 +164,10 @@ index a3501c3a..533af137 100644
                      .background_voice
                      .as_ref()
 diff --git a/codex-rs/tui/src/app_event.rs b/codex-rs/tui/src/app_event.rs
-index d2b8942f..41a79439 100644
+index 4c6ede33..fa86d25f 100644
 --- a/codex-rs/tui/src/app_event.rs
 +++ b/codex-rs/tui/src/app_event.rs
-@@ -663,6 +663,17 @@ pub(crate) enum AppEvent {
+@@ -717,6 +717,17 @@ pub(crate) enum AppEvent {
          thread_id: ThreadId,
      },
  
@@ -186,7 +186,7 @@ index d2b8942f..41a79439 100644
      OpenThreadGoalMenu {
          thread_id: ThreadId,
 diff --git a/codex-rs/tui/src/chatwidget.rs b/codex-rs/tui/src/chatwidget.rs
-index 5ca41829..094ff8a3 100644
+index 7dbb54bb..5a4a1f02 100644
 --- a/codex-rs/tui/src/chatwidget.rs
 +++ b/codex-rs/tui/src/chatwidget.rs
 @@ -387,6 +387,7 @@ mod status_controls;
@@ -197,7 +197,7 @@ index 5ca41829..094ff8a3 100644
  mod thread_title_status;
  mod thread_usage;
  pub(crate) use self::thread_usage::ThreadUsageOutcome;
-@@ -761,6 +762,7 @@ pub(crate) struct ChatWidget {
+@@ -769,6 +770,7 @@ pub(crate) struct ChatWidget {
      status_line_workspace_messages_disabled: bool,
      // Cached backend-estimated cost and bounded refresh state for the current thread.
      thread_usage: thread_usage::ThreadUsageState,
@@ -205,7 +205,7 @@ index 5ca41829..094ff8a3 100644
      // Current thread-goal status shown in the status line when plan mode is inactive.
      current_goal_status_indicator: Option<GoalStatusIndicator>,
      current_goal_status: Option<GoalStatusState>,
-@@ -1810,6 +1812,10 @@ impl ChatWidget {
+@@ -1827,6 +1829,10 @@ impl ChatWidget {
          if self.rejects_misalignment_policy_op(&op) {
              return false;
          }
@@ -217,7 +217,7 @@ index 5ca41829..094ff8a3 100644
              && matches!(
                  &op,
 diff --git a/codex-rs/tui/src/chatwidget/backend_banners.rs b/codex-rs/tui/src/chatwidget/backend_banners.rs
-index 757d2f9f..dddbcc27 100644
+index e769319d..0fdd7dd3 100644
 --- a/codex-rs/tui/src/chatwidget/backend_banners.rs
 +++ b/codex-rs/tui/src/chatwidget/backend_banners.rs
 @@ -61,7 +61,10 @@ pub(super) struct BackendBannerState {
@@ -277,27 +277,27 @@ index 757d2f9f..dddbcc27 100644
          if !same_occurrence {
              self.backend_banner_state.shown = false;
              self.backend_banner_state.dismissed = self.reserve_notice_already_shown();
-@@ -511,6 +529,7 @@ impl ChatWidget {
- 
+@@ -515,6 +533,7 @@ impl ChatWidget {
      pub(crate) fn clear_backend_banner(&mut self) {
+         self.clear_security_setup_banner();
          self.backend_banner_state = BackendBannerState::default();
 +        self.model_guard_clear_refused_switch();
          self.backend_banner_notice_model = None;
          self.bottom_pane
              .dismiss_view_by_id(LUNA_RESERVE_RECOVERY_VIEW_ID);
 diff --git a/codex-rs/tui/src/chatwidget/constructor.rs b/codex-rs/tui/src/chatwidget/constructor.rs
-index fb4575ab..11ae3221 100644
+index dc5adf7b..91382f63 100644
 --- a/codex-rs/tui/src/chatwidget/constructor.rs
 +++ b/codex-rs/tui/src/chatwidget/constructor.rs
-@@ -96,6 +96,7 @@ impl ChatWidget {
+@@ -95,6 +95,7 @@ impl ChatWidget {
              app_event_tx.clone(),
              pet_http_client.clone(),
          );
 +        let model_guard = model_guard::ModelGuard::from_config(&config);
          let mut widget = Self {
              empty_state_animation: std::cell::RefCell::new(empty_state_animation),
-             cyber_policy_notice: Default::default(),
-@@ -275,6 +276,7 @@ impl ChatWidget {
+             daybreak_enabled: false,
+@@ -280,6 +281,7 @@ impl ChatWidget {
              status_line_workspace_headline_last_requested_at: None,
              status_line_workspace_messages_disabled: false,
              thread_usage: thread_usage::ThreadUsageState::default(),
@@ -306,10 +306,10 @@ index fb4575ab..11ae3221 100644
              current_goal_status: None,
              external_editor_state: ExternalEditorState::Closed,
 diff --git a/codex-rs/tui/src/chatwidget/input_submission.rs b/codex-rs/tui/src/chatwidget/input_submission.rs
-index a37e938c..129e3e6b 100644
+index e20aaa3a..88352d24 100644
 --- a/codex-rs/tui/src/chatwidget/input_submission.rs
 +++ b/codex-rs/tui/src/chatwidget/input_submission.rs
-@@ -197,6 +197,14 @@ impl ChatWidget {
+@@ -198,6 +198,14 @@ impl ChatWidget {
          {
              return (false, None);
          }
@@ -1464,7 +1464,7 @@ index 00000000..ea836ba5
 +        .collect()
 +}
 diff --git a/codex-rs/tui/src/chatwidget/protocol.rs b/codex-rs/tui/src/chatwidget/protocol.rs
-index ba0d2e40..b1c615f6 100644
+index 85ea5513..4bb3dbce 100644
 --- a/codex-rs/tui/src/chatwidget/protocol.rs
 +++ b/codex-rs/tui/src/chatwidget/protocol.rs
 @@ -15,6 +15,8 @@ impl ChatWidget {
@@ -1476,7 +1476,7 @@ index ba0d2e40..b1c615f6 100644
          if replay_kind != Some(ReplayKind::ResumeInitialMessages)
              && !self.recover_resumed_reasoning(&notification)
          {
-@@ -215,7 +217,7 @@ impl ChatWidget {
+@@ -229,7 +231,7 @@ impl ChatWidget {
              ServerNotification::SkillsChanged(_) => {
                  self.refresh_skills_for_current_cwd(/*force_reload*/ true);
              }
@@ -1486,25 +1486,15 @@ index ba0d2e40..b1c615f6 100644
                  self.on_app_server_model_verification(&notification.verifications)
              }
 diff --git a/codex-rs/tui/src/chatwidget/rendering.rs b/codex-rs/tui/src/chatwidget/rendering.rs
-index 36c87335..144ad350 100644
+index adfe1cee..dadf0c62 100644
 --- a/codex-rs/tui/src/chatwidget/rendering.rs
 +++ b/codex-rs/tui/src/chatwidget/rendering.rs
-@@ -244,7 +244,8 @@ impl ChatWidget {
-             } else {
-                 self.ambient_pet_wrap_reserved_cols()
-             };
--            self.bottom_pane
-+            let pane = self
-+                .bottom_pane
-                 .as_renderable_with_options(crate::bottom_pane::ComposerRenderOptions {
-                     composer_gap,
-                     working_tip,
-@@ -254,7 +255,24 @@ impl ChatWidget {
-                         != crate::bottom_pane::CommandPopupPlacement::AboveComposer,
-                     command_popup_placement,
-                     footer,
--                })
-+                });
+@@ -256,7 +256,24 @@ impl ChatWidget {
+             options.textarea_right_reserve = right_reserve;
+             options.separate_status_line = options.command_popup_placement
+                 != crate::bottom_pane::CommandPopupPlacement::AboveComposer;
+-            self.bottom_pane.backdrop_with_options(options)
++            let pane = self.bottom_pane.backdrop_with_options(options);
 +            // The guard's warning belongs to the bottom pane, so every layout
 +            // that sizes the pane (inline and alternate screen) shows it.
 +            match self.model_guard_lines() {
@@ -1526,7 +1516,7 @@ index 36c87335..144ad350 100644
      }
  
 diff --git a/codex-rs/tui/src/chatwidget/replay.rs b/codex-rs/tui/src/chatwidget/replay.rs
-index ccb5b775..dc77bea9 100644
+index 1907577c..6d374227 100644
 --- a/codex-rs/tui/src/chatwidget/replay.rs
 +++ b/codex-rs/tui/src/chatwidget/replay.rs
 @@ -124,6 +124,9 @@ impl ChatWidget {
@@ -1538,12 +1528,12 @@ index ccb5b775..dc77bea9 100644
 +            }
              let Turn {
                  id: turn_id,
-                 items_view: _,
+                 root_turn_id,
 diff --git a/codex-rs/tui/src/chatwidget/session_flow.rs b/codex-rs/tui/src/chatwidget/session_flow.rs
-index 3a3a68c3..e4005084 100644
+index 97c7de5b..7a857b62 100644
 --- a/codex-rs/tui/src/chatwidget/session_flow.rs
 +++ b/codex-rs/tui/src/chatwidget/session_flow.rs
-@@ -180,6 +180,7 @@ impl ChatWidget {
+@@ -187,6 +187,7 @@ impl ChatWidget {
              .set_active_reasoning_effort_baseline(effort.as_ref());
          self.refresh_model_display();
          self.refresh_status_surfaces();
@@ -1552,10 +1542,10 @@ index 3a3a68c3..e4005084 100644
              && self.should_prefetch_rate_limits()
              && (self.current_model() == crate::model_catalog::LUNA_RESERVE_MODEL
 diff --git a/codex-rs/tui/src/chatwidget/settings.rs b/codex-rs/tui/src/chatwidget/settings.rs
-index a9c2d193..48d0117a 100644
+index a5ddae21..ef7b14d5 100644
 --- a/codex-rs/tui/src/chatwidget/settings.rs
 +++ b/codex-rs/tui/src/chatwidget/settings.rs
-@@ -228,6 +228,9 @@ impl ChatWidget {
+@@ -276,6 +276,9 @@ impl ChatWidget {
          self.status_line_workspace_headline_last_requested_at = None;
          self.status_line_workspace_messages_disabled = false;
          self.clear_thread_usage_state();
@@ -1565,7 +1555,7 @@ index a9c2d193..48d0117a 100644
          self.status_account_display = status_account_display;
          self.plan_type = plan_type;
          self.has_chatgpt_account = has_chatgpt_account;
-@@ -240,6 +243,16 @@ impl ChatWidget {
+@@ -289,6 +292,16 @@ impl ChatWidget {
          self.refresh_status_surfaces();
      }
  
@@ -1582,7 +1572,7 @@ index a9c2d193..48d0117a 100644
      /// Set the syntax theme override in the widget's config copy.
      pub(crate) fn set_tui_theme(&mut self, theme: Option<String>) {
          self.local_settings.tui.theme = theme;
-@@ -359,6 +372,7 @@ impl ChatWidget {
+@@ -408,6 +421,7 @@ impl ChatWidget {
          }
  
          self.apply_thread_settings(notification.thread_settings);
@@ -1591,10 +1581,10 @@ index a9c2d193..48d0117a 100644
  
      #[cfg(test)]
 diff --git a/codex-rs/tui/src/chatwidget/slash_dispatch.rs b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-index 4fe2ed05..7e277352 100644
+index 182a696b..2abd48c5 100644
 --- a/codex-rs/tui/src/chatwidget/slash_dispatch.rs
 +++ b/codex-rs/tui/src/chatwidget/slash_dispatch.rs
-@@ -296,6 +296,10 @@ impl ChatWidget {
+@@ -334,6 +334,10 @@ impl ChatWidget {
                      self.add_error_message(PARENT_OWNED_INPUT_MESSAGE.to_string());
                      return;
                  }
@@ -1605,7 +1595,7 @@ index 4fe2ed05..7e277352 100644
                  self.clear_token_usage();
                  if !self.bottom_pane.is_task_running() {
                      self.bottom_pane.set_task_running(/*running*/ true);
-@@ -520,6 +524,7 @@ impl ChatWidget {
+@@ -558,6 +562,7 @@ impl ChatWidget {
                          /*refreshing_rate_limits*/ false, /*request_id*/ None,
                      );
                  }
@@ -1614,7 +1604,7 @@ index 4fe2ed05..7e277352 100644
              SlashCommand::Cd => {
                  self.dispatch_command_with_args(SlashCommand::Cd, "~".to_string(), Vec::new());
 diff --git a/codex-rs/tui/src/chatwidget/status_surfaces.rs b/codex-rs/tui/src/chatwidget/status_surfaces.rs
-index 616dd6df..480d556f 100644
+index 46727cfc..f1979e6a 100644
 --- a/codex-rs/tui/src/chatwidget/status_surfaces.rs
 +++ b/codex-rs/tui/src/chatwidget/status_surfaces.rs
 @@ -215,11 +215,37 @@ impl ChatWidget {
@@ -1660,7 +1650,7 @@ index 616dd6df..480d556f 100644
          let hyperlink_url = selections
              .status_line_items
              .contains(&StatusLineItem::PullRequestNumber)
-@@ -1105,7 +1131,7 @@ impl ChatWidget {
+@@ -1116,7 +1142,7 @@ impl ChatWidget {
      }
  }
  
@@ -1669,7 +1659,7 @@ index 616dd6df..480d556f 100644
      snapshot: &RateLimitSnapshotDisplay,
  ) -> Option<(&RateLimitWindowDisplay, bool)> {
      find_primary_codex_window(snapshot, "5h")
-@@ -1114,7 +1140,7 @@ fn five_hour_status_window(
+@@ -1125,7 +1151,7 @@ fn five_hour_status_window(
          .or_else(|| non_weekly_secondary_window_when_primary_is_weekly(snapshot))
  }
  

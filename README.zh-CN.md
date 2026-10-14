@@ -109,7 +109,7 @@ python3 codex/model-guard/scripts/install.py --language zh
 model-guard-codex doctor
 ```
 
-预编译运行时支持 **Linux x86_64、glibc 2.36+、Python 3.12+，以及官方独立安装版 Codex 0.158.0**。安装器校验发布包、准备独立版本目录，再原子切换现有的 `~/.local/bin/codex` 软链接。在当前 shell 下一次执行 `codex` 或 `cx resume` 即可使用。
+预编译运行时支持 **Linux x86_64、glibc 2.36+、Python 3.12+，以及官方独立安装版 Codex 0.162.1**。安装器校验发布包、准备独立版本目录，再原子切换现有的 `~/.local/bin/codex` 软链接。在当前 shell 下一次执行 `codex` 或 `cx resume` 即可使用。
 
 一个正在运行的 Codex 进程会一直用它启动时的那个可执行文件，所以已经开着的会话不会因为安装而带上 Model Guard——任何原生程序都是这样，安装器改不了。安装器和 `doctor` 会把还跑在别的可执行文件上的会话连同目录一起列出来：把它们做完或 `/quit`，再在那个目录 `codex resume` 即可。不再被任何会话使用的旧版本包会被清掉。
 

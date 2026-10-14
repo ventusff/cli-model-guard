@@ -109,7 +109,7 @@ python3 codex/model-guard/scripts/install.py --language en
 model-guard-codex doctor
 ```
 
-The prebuilt runtime supports **Linux x86_64, glibc 2.36+, Python 3.12+ and the official standalone Codex 0.158.0**. The installer verifies a release checksum, prepares a versioned package and atomically switches the existing `~/.local/bin/codex` symlink. Your next `codex` or `cx resume` invocation picks it up in the current shell.
+The prebuilt runtime supports **Linux x86_64, glibc 2.36+, Python 3.12+ and the official standalone Codex 0.162.1**. The installer verifies a release checksum, prepares a versioned package and atomically switches the existing `~/.local/bin/codex` symlink. Your next `codex` or `cx resume` invocation picks it up in the current shell.
 
 A running Codex process keeps the executable it started with, so an open session never gains Model Guard by installation alone; that is how every native program behaves, and no installer can change it. Instead of leaving you to wonder, the installer and `doctor` list the sessions still on another executable, with their directories: finish or `/quit` each one, then `codex resume` there. Earlier versioned packages no session uses any more are removed.
 
