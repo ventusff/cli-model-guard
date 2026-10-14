@@ -112,14 +112,20 @@ def prepare(args):
 
 
 def stage_commits(source):
-    """Map patch names to the commits that carry them, in chain order."""
+    """Map patch names to the commits that carry them, in chain order, and
+    name the upstream commit: the parent of the first patch's commit, however
+    much upstream history the tree holds."""
     log = git(source, "log", "--reverse", "--format=%H %s", capture=True).stdout.splitlines()
     commits = {}
     for line in log:
         sha, _, subject = line.partition(" ")
         if subject in PATCH_ORDER:
             commits[subject] = sha
-    return log[0].split()[0], commits
+    first = commits.get(SOURCE_PATCHES[0])
+    if first is None:
+        raise RuntimeError(f"The source tree has no commit named {SOURCE_PATCHES[0]}")
+    upstream = git(source, "rev-parse", f"{first}~1", capture=True).stdout.strip()
+    return upstream, commits
 
 
 def drop_generated(source):

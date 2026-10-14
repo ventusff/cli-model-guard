@@ -25,6 +25,8 @@ import shutil
 import subprocess
 import sys
 
+import rebase
+
 HERE = Path(__file__).resolve().parent
 PLUGIN = HERE.parent
 REPO = PLUGIN.parents[1]
@@ -120,7 +122,7 @@ def main():
     rust = out(["python3", "-c", "import sys,tomllib; print(tomllib.loads(open(sys.argv[1]).read())['toolchain']['channel'])",
                 source / "codex-rs/rust-toolchain.toml"])
     image = f"rust:{rust}-bookworm"
-    upstream = out(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=source)
+    upstream, _ = rebase.stage_commits(source)
     print(f"Codex {codex_version} at {upstream}, Rust {rust}, {args.jobs} cores")
 
     (work / "target").mkdir(exist_ok=True)
