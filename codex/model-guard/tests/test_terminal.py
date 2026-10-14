@@ -89,6 +89,20 @@ def fixture_daemons(base):
     return pids
 
 
+def end_daemons(base):
+    """End the background app-server daemons Codex started under a fixture home."""
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        pids = fixture_daemons(base)
+        if not pids:
+            break
+        for pid in pids:
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                pass
+        time.sleep(1)
+
+
 @contextlib.contextmanager
 def fixture_dir(prefix):
     """A temporary Codex home whose background daemons end with it.
@@ -100,16 +114,7 @@ def fixture_dir(prefix):
         try:
             yield temp
         finally:
-            for sig in (signal.SIGTERM, signal.SIGKILL):
-                pids = fixture_daemons(temp)
-                if not pids:
-                    break
-                for pid in pids:
-                    try:
-                        os.kill(pid, sig)
-                    except ProcessLookupError:
-                        pass
-                time.sleep(1)
+            end_daemons(temp)
 
 
 def thread_requests(api):
@@ -277,6 +282,9 @@ class NativeTerminalTests(unittest.TestCase):
             seed = subprocess.run([binary, "-c", "model='gpt-reserve'", "exec", "--skip-git-repo-check", "--json", "--sandbox", "read-only", "Reply OK."], env=env, cwd=base, capture_output=True, text=True, timeout=90, check=True)
             thread = next(json.loads(line)["thread_id"] for line in seed.stdout.splitlines() if json.loads(line).get("type") == "thread.started")
             self.assertEqual(api.requests[-1]["model"], "gpt-reserve")
+            # The process that ran it ends, so the thread is restored in a new one,
+            # where the configured model is the selection.
+            end_daemons(base)
             terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "resume", thread, "Reply again."], env, base)
             try:
                 # The prompt is held in the composer, or refused before any request
