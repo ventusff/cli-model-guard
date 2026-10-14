@@ -4,7 +4,7 @@
 
 ## 结论
 
-**有可行的辅助检测办法。1.5 版已经接入恰好 516 个推理 token 的被动监测和告警，1.7 版把响应正文里的模型标签作为第二层披露信号接入，统计指纹也能在缺少模型响应头时检查行为是否偏离基线。**逐请求准确指出未披露的 GPT-4o 身份仍未解决，但这不妨碍先把有用的异常信号显示出来。
+**有可行的辅助检测办法。Model Guard 用恰好 516 个推理 token 做被动监测和告警，把响应正文里的模型标签作为第二层披露信号，统计指纹也能在缺少模型响应头时检查行为是否偏离基线。**逐请求准确指出未披露的 GPT-4o 身份仍未解决，但这不妨碍先把有用的异常信号显示出来。
 
 服务端重路由确实有公开案例：[Codex #11189](https://github.com/openai/codex/issues/11189) 中有请求 5.3-Codex、收到 5.2 标识的复现及 OpenAI 维护者回应。但它不能证明当前存在统一的 GPT-4o 回退。
 
@@ -58,7 +58,7 @@ python3 research/reasoning_counts.py /明确指定的会话日期目录
 
 每次 Responses 流的 `response.created` 和 `response.completed` 里都写着一个 `model`。它由服务端写入，属于服务端披露的信息，但不是有效模型响应头：官方 [PR #12061](https://github.com/openai/codex/pull/12061)（2026-02-18）删掉了客户端对它的比对，理由是「减少误报」和「使用正确的模型标识」，没有公开具体误报案例。合理的推断是：正文标签可能带日期或后缀，与请求的写法不完全一样。
 
-ChatGPT 登录下服务端通常不发有效模型响应头（见下文本机实测），守卫因此对日常请求一直说不出话。1.7 版把这个标签作为 `responseLabel` 放进 `model/routing/updated`，并用一条专门针对官方所担心的误报类型设计的规则来比对：
+ChatGPT 登录下服务端通常不发有效模型响应头（见下文本机实测），守卫若不看它，对日常请求就说不出话。所以把这个标签作为 `responseLabel` 放进 `model/routing/updated`，并用一条专门针对官方所担心的误报类型设计的规则来比对：
 
 | 请求 | 正文标签 | 结果 |
 |---|---|---|
@@ -139,7 +139,7 @@ ChatGPT 登录下服务端通常不发有效模型响应头（见下文本机实
 | [codex-statusline](https://github.com/sh-ai-x/codex-statusline) | 配置官方内置状态项 | 模型选择值不能验证路由 |
 | [mullller/codex-hud](https://github.com/mullller/codex-hud) | 通过 tmux 显示状态 | 借鉴显示方式；不用“最新会话文件”判断当前终端 |
 | [brandonwie/codex-hud](https://github.com/brandonwie/codex-hud) | 可使用带补丁的原生页脚 | 本插件使用官方二进制 |
-| [Every Code](https://github.com/just-every/code) | 从响应正文读取模型，比较并告警 | 1.7 采纳了读正文标签的思路，但比对更严（缩小档位算不同）、级别低于响应头，且标签始终在 `/status` 可见 |
+| [Every Code](https://github.com/just-every/code) | 从响应正文读取模型，比较并告警 | Model Guard 采纳了读正文标签的思路，但比对更严（缩小档位算不同）、级别低于响应头，且标签始终在 `/status` 可见 |
 | [ModelTrace](https://github.com/xqy2006/ModelTrace) | 三轮数字输出指纹，推测库内候选模型 | 做了源码审计和实测；不作为确定性路由证据 |
 | [hlwy-ai-checker](https://github.com/hanlinwenyuan/hlwy-ai-checker) | 与基准渠道比较统计指纹 | 作者也说明不能单独证明实际模型身份 |
 | [糖果测试及 516 讨论](https://github.com/router-for-me/CLIProxyAPI/discussions/3937) | 检查推理表现、观察 token 数 | 1.5 已采纳 516 为独立启发式信号；不将其直接映射成模型名 |
@@ -162,27 +162,27 @@ ModelTrace 审计版本为 `60949ef522a84f66b1236b459308b48028d36949`。其候�
 2. 单独做 SSE 诊断：响应正文是 `gpt-6-astra`，有效模型头仍缺失。只对该诊断进程设置临时服务商别名及传输选项，没有修改日常配置。
 3. 通过官方 Codex 执行三轮 ModelTrace 数字挑战，保留日常 `max` 强度：首选候选为 `gpt-6-astra`，库内概率 99.12%；三轮都没有有效模型披露。这是行为相似结果，不能验证底层权重。
 
-4. 2026-09-10 用装好的 1.7 原生构建再探针一次（`gpt-6-astra / max`）：仍没有有效模型响应头；响应正文标签是 `gpt-6-astra`，与请求一致，探针结论 `unverified`、`body_label_consistent: true`。这就是这个后端的日常形态：每次响应都有正文标签，响应头没有。
+4. 2026-09-10 用装好的原生构建再探针一次（`gpt-6-astra / max`）：仍没有有效模型响应头；响应正文标签是 `gpt-6-astra`，与请求一致，探针结论 `unverified`、`body_label_consistent: true`。这就是这个后端的日常形态：每次响应都有正文标签，响应头没有。
 
 因此，本次没有证实本机被路由到 GPT-4o，也没有足够证据保证不存在隐藏路由。公开记录不包含账号、凭据、会话文本或原始传输日志。
 
-## 客户端自己换模型（1.10 处理的失效方式）
+## 客户端自己换模型
 
-官方 0.155.1 有一条服务端披露看不出来的客户端切换：账号额度读取返回 `luna_reserve` 类型的 `rate_limit_upsell` 横幅时，TUI 的 `apply_backend_banner_fallback`（[`tui/src/app/backend_banner_fallback.rs`](https://github.com/openai/codex/blob/be2951ea34f0d295ed0becf97079f92fa5f6950e/codex-rs/tui/src/app/backend_banner_fallback.rs)）会发 `thread/settings/update` 把会话模型改成 `gpt-reserve`（[`tui/src/model_catalog.rs`](https://github.com/openai/codex/blob/be2951ea34f0d295ed0becf97079f92fa5f6950e/codex-rs/tui/src/model_catalog.rs) 里的 `LUNA_RESERVE_MODEL`，在模型列表里隐藏；模型目录称它为「快而便宜的编码模型」，其系统提示自称「基于 GPT-5 的 agent」），只在历史里加一行提示，之后某次读取报告常规额度恢复时再换回去。带 `blocked_model_slug` 和 `fallback_model_slugs` 的横幅同样会换到候选列表里的第一个，排队中的提示也被改写到新模型（`apply_reserve_fallback_to_pending_turn`）。此后每次请求本身就是发给 `gpt-reserve` 的，服务端标签也是 `gpt-reserve`，1.7–1.9 的「请求对披露」比较因此一直是绿的。2026-09-27 对会话文件的核查发现五个交互会话分别在 2026-09-26 08:31–16:13 UTC 和 2026-09-27 06:42–20:39 UTC 以这种方式跑在 `gpt-reserve` 上，每次进入前的 `token_count` 记录里额度都是 `limit_id: premium`、`has_credits: false`，派生出的子 agent 会话继承了同一个模型。Model Guard 现在同时比对请求和用户的选择、拒绝这些切换，并在任何差异上停住会话；见下节。
+官方 0.155.1 有一条服务端披露看不出来的客户端切换：账号额度读取返回 `luna_reserve` 类型的 `rate_limit_upsell` 横幅时，TUI 的 `apply_backend_banner_fallback`（[`tui/src/app/backend_banner_fallback.rs`](https://github.com/openai/codex/blob/be2951ea34f0d295ed0becf97079f92fa5f6950e/codex-rs/tui/src/app/backend_banner_fallback.rs)）会发 `thread/settings/update` 把会话模型改成 `gpt-reserve`（[`tui/src/model_catalog.rs`](https://github.com/openai/codex/blob/be2951ea34f0d295ed0becf97079f92fa5f6950e/codex-rs/tui/src/model_catalog.rs) 里的 `LUNA_RESERVE_MODEL`，在模型列表里隐藏；模型目录称它为「快而便宜的编码模型」，其系统提示自称「基于 GPT-5 的 agent」），只在历史里加一行提示，之后某次读取报告常规额度恢复时再换回去。带 `blocked_model_slug` 和 `fallback_model_slugs` 的横幅同样会换到候选列表里的第一个，排队中的提示也被改写到新模型（`apply_reserve_fallback_to_pending_turn`）。此后每次请求本身就是发给 `gpt-reserve` 的，服务端标签也是 `gpt-reserve`，只比对「请求」和「披露」什么都看不出来。2026-09-27 对会话文件的核查发现五个交互会话分别在 2026-09-26 08:31–16:13 UTC 和 2026-09-27 06:42–20:39 UTC 以这种方式跑在 `gpt-reserve` 上，每次进入前的 `token_count` 记录里额度都是 `limit_id: premium`、`has_credits: false`，派生出的子 agent 会话继承了同一个模型。所以 Model Guard 让每一个请求都对上用户的选择、拒绝这些切换，并在任何差异上停住会话；见下节。
 
-## 1.7 的原生实现（1.10 起会停止会话）
+## 原生实现
 
-官方 [PR #12061](https://github.com/openai/codex/pull/12061) 删除了正文 `response.model` 的判断，以减少误报并使用正确模型标识。Model Guard 沿用现有传输层的有效模型头，添加带会话、轮次和采样请求 ID 的 `model/routing/updated` 元数据事件。请求模型、服务商、强度和服务档位来自该次实际请求；可选的服务端模型和可选的正文标签各自独立记录，缺失就保留缺失，标签永远不会被当成服务端模型。
+官方 [PR #12061](https://github.com/openai/codex/pull/12061) 删除了正文 `response.model` 的判断，以减少误报并使用正确模型标识。Model Guard 沿用现有传输层的有效模型头，添加带会话、轮次和采样请求 ID 的 `model/routing/updated` 元数据事件。请求模型、服务商、强度和服务档位来自该次实际请求；可选的服务端模型和可选的正文标签各自独立记录，缺失就保留缺失，标签永远不会被当成服务端模型；每次新的采样请求清掉上一次的披露。实现固定官方源码提交，附可审查补丁、协议生成文件、同版本辅助程序和发布校验值；维护代价在[构建说明](native/README.md)明确列出。
 
-此前的 tmux 方案影响了鼠标滚轮，并绕过 resume/fork，已被原生扩展替代。当前实现固定官方源码提交，附可审查补丁、协议生成文件、同版本辅助程序和发布校验值；维护代价在[构建说明](native/README.md)明确列出。
+Model Guard 就在每个响应都要经过的那一层客户端代码里工作，设在每个模型请求都必经的两处。请求只在会话没有停住、并且请求的正是**已选模型**时才放行；被拒的请求什么都不发，这一轮以终止性错误结束。映射每个响应的那条流判断响应披露了什么：有效模型响应头是别的模型，或正文标签是别的一代或缩小档位，就在那里截断响应。goal 把这个终止性错误当成普通的轮次错误，不再续跑，所以停住的会话一点模型工作都不做，不管这一轮是谁起的：提问、评审、压缩、排好队的命令、goal 续跑、别的线程发来的消息、语音交接。原因按「请求 > 响应头 > 正文标签 > 516 启发式」排序；516 由 TUI 统计，只有打开 `halt_on_reasoning_anomaly` 时才报给 guard 停住；更强的原因替换更弱的。
 
-正常显示合入原有页脚，不额外占行。服务端披露不同模型时展开红色提示；正文标签换了一代或带缩小档位时展开橙色提示；high 及以上强度下，最近 5 次有效响应中至少 3 次恰好用了 516 推理 token，展开黄色启发式提示。单次命中和缺少披露都放在 `/status`，使用完整句子解释。这一阈值是产品策略，没有经过模型身份或截断概率的校准。
+已选模型是配置的默认模型，直到用户用 `/model`、选择器里的「本会话」选项或确认的更快模型重试选了模型；TUI 把这个选择发给 guard（`thread/modelGuard/update`），也只有这个选择能解除停住。会话开始时模型不是已选模型的，在第一轮之前就停住——在 `gpt-reserve` 上恢复的会话就是这样被抓住的。guard 按线程把状态记在承载这些线程的进程里，所以切线程、换接入的客户端、退出后再恢复，线程的选择和停住都还在；fork 一开始就带着父线程的状态；子 agent、评审和自动审批评审用它们配置好的模型运行，它们服务的线程停住时它们也停住，给那个线程选定模型时它们一起解除。websocket 预热也只在会话没有停住、并且用的是已选模型时才发。用户换掉一个模型时，Codex 在新模型第一轮之前给历史写的摘要由已选模型来写。停住通过 `thread/modelGuard/updated` 告诉 TUI。
 
-1.10 起 guard 还记住**已选模型**：配置的默认模型，或最近一次手动 `/model` 的选择；配置了 `review_model` 时它是请求可以使用的唯一另一个模型。guard 生效期间，Codex 的自动换模（Luna Reserve 降级和横幅宣布的降级）一律拒绝，历史里写一条警告说明被限和被推荐的模型，页脚常驻琥珀色提示直到额度恢复；额度恢复后 Codex 换回原模型时会恢复这个选择。请求了别的模型、有效模型响应头是别的模型、正文标签是别的一代或缩小档位，任一种都是**停止**：通过正常的 `turn/interrupt` 打断正在跑的一轮，历史里写一条红色错误，页脚常驻一行加粗红色的「已停止」，之后每一轮（提问、评审、压缩）都被拦住，输入的内容退回输入框，直到用户重新选定模型。三种原因按「请求 > 响应头 > 正文标签」排序，更强的原因替换更弱的但不再打断第二次；516 启发式只在打开 `halt_on_reasoning_anomaly` 时才停止。会话配置完成时模型不是已选模型的，会在第一轮之前就停住——在 `gpt-reserve` 上恢复的会话就是这样被抓住的；只要备用模型在用，页脚就有红色提示。已选模型和停止状态按线程记在进程里：切线程、开 side 对话重建界面时原样恢复；停住的线程上经任何别的路径又开了一轮都会被打断；没有界面在看的线程，它的路由通知也按该线程记住的选择判定，并通过同一个请求打断它的那一轮；服务端推进线程设置里的模型、账号切换期间还在飞的请求同样照判。Codex 从 Reserve 换回来只允许换回已选模型，而且不解除停止。这一切都不改模型：guard 自己不发设置更新、不重试、不发推理请求。
+TUI 拒绝 Codex 自己的换模（Luna Reserve 降级和横幅宣布的降级），历史里写一条警告说明被限和被推荐的模型，页脚常驻琥珀色提示直到额度恢复；Codex 从 Reserve 换回来只允许换回已选模型，而且不解除停住。TUI 显示 guard 的状态：页脚下方一行加粗红色、写明原因的「已停止」，只要备用模型在用就有红色提示，会话停住时输入的内容留在输入框里。high 及以上强度下，最近 5 次有效响应中至少 3 次恰好用了 516 推理 token，展开黄色启发式提示；单次命中不改变默认界面。`/status` 用完整句子给出计数和证据边界。这一阈值是产品策略，没有经过模型身份或截断概率的校准。这一切都不改模型：guard 自己不发设置更新、不重试、不发推理请求。
 
-每个原生窗口只消费自己当前会话的事件；后台 `threadSource=system` 标题和子代理不会覆盖主模型。回放记录不计入实时检测。推理用量来自 `rawResponse/completed`，按响应 ID 去重，并与模型、服务商、强度、服务档位、账号绑定。新采样请求清除正向披露，本轮已发现的差异保留，结束后标明「上轮」。账号使用 Codex 自身状态，不额外轮询、不读登录文件或会话文件、不记录传输日志。
+每个原生窗口只消费自己当前会话的事件；后台 `threadSource=system` 标题和子代理不会覆盖主模型。回放记录不计入实时检测。推理用量来自 `rawResponse/completed`，按响应 ID 去重，并与模型、服务商、强度、服务档位、账号绑定。账号使用 Codex 自身状态，不额外轮询、不读登录文件或会话文件、不记录传输日志。
 
-`resume`、`fork`、profile、本地模型和显式远端都沿用原生命令、配置加载及目录语义；显式远端服务也需要元数据扩展才能提供完整观测。输入和终端事件处理保持原生。安装时原子切换现有可执行文件软链接，不增加 shell PATH 区块。
+`resume`、`fork`、profile、本地模型和显式远端都沿用原生命令、配置加载及目录语义；显式远端服务也需要同一扩展，才能提供完整观测并停住它的线程。输入和终端事件处理保持原生。安装时原子切换现有可执行文件软链接，不增加 shell PATH 区块。
 
 ## 独立诊断
 

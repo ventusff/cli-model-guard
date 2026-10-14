@@ -148,8 +148,9 @@ cd /work/build/source/codex-rs
 export CARGO_TARGET_DIR=/work/build/target INSTA_WORKSPACE_ROOT=/work/build/source/codex-rs RUST_MIN_STACK=16777216
 cargo clippy --locked -p codex-tui --tests -j {jobs} --message-format=json > /work/build/clippy.json || true
 python3 /repo/codex/model-guard/native/clippy_gate.py "$baseline" /work/build/clippy.json
+cargo test --locked -p codex-core -j {jobs} --lib -- model_guard
+cargo test --locked -p codex-core -j {jobs} --test all -- model_guard model_routing
 cargo test --locked -p codex-tui -j {jobs} --lib -- native_guard model_guard
-cargo test --locked -p codex-core -j {jobs} --test all -- model_routing
 """, jobs)
 
 

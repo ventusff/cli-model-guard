@@ -197,7 +197,8 @@ class NativeTerminalTests(unittest.TestCase):
             base = Path(temp)
             terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "Reply OK."], fixture_home(base, api, alternate_screen="auto"), base)
             try:
-                terminal.wait(lambda: "STOPPED · ROUTE DIFF gpt-6-astra" in terminal.text() and "Model Guard interrupted this turn" in terminal.text())
+                # The guard ends the response that disclosed another model.
+                terminal.wait(lambda: "STOPPED · ROUTE DIFF gpt-6-astra" in terminal.text() and "Model Guard holds this thread" in terminal.text())
                 visible = lambda: thread_requests(api)
                 # The stop holds every further turn until a model is selected.
                 terminal.send(b"Second prompt.")
@@ -214,6 +215,39 @@ class NativeTerminalTests(unittest.TestCase):
                 terminal.send(b"\r")
                 terminal.wait(lambda: terminal.text().count("Model Guard held this input") >= 2)
                 self.assertEqual(len(visible()), 1)
+            finally:
+                terminal.close()
+
+    def test_a_held_thread_sends_nothing_for_its_goal(self):
+        binary = os.environ["MODEL_GUARD_NATIVE_BIN"]
+        with fixture_dir("mg-native-goal-") as temp, ResponsesFixture("gpt-4o") as api:
+            base = Path(temp)
+            terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never"], fixture_home(base, api), base)
+
+            def settle(seconds):
+                deadline = time.monotonic() + seconds
+                while time.monotonic() < deadline:
+                    terminal.poll()
+
+            try:
+                terminal.wait(lambda: "selected gpt-6-astra" in terminal.text())
+                # The goal starts its first turn; the disclosed route holds the thread.
+                terminal.send(b"/goal Reply OK until told otherwise.")
+                terminal.wait(lambda: "Reply OK until told otherwise." in terminal.text())
+                settle(1)
+                terminal.send(b"\r")
+                terminal.wait(lambda: "STOPPED · ROUTE DIFF gpt-6-astra" in terminal.text())
+                # Codex continues an active goal whenever the thread goes idle;
+                # the held thread sends none of those turns' requests.
+                settle(8)
+                self.assertEqual(len(thread_requests(api)), 1)
+                # Resuming the goal starts turns again; they send nothing either.
+                terminal.send(b"/goal resume")
+                terminal.wait(lambda: "/goal resume" in terminal.text())
+                settle(1)
+                terminal.send(b"\r")
+                settle(8)
+                self.assertEqual(len(thread_requests(api)), 1)
             finally:
                 terminal.close()
 
@@ -245,7 +279,10 @@ class NativeTerminalTests(unittest.TestCase):
             self.assertEqual(api.requests[-1]["model"], "gpt-reserve")
             terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "resume", thread, "Reply again."], env, base)
             try:
-                terminal.wait(lambda: "STOPPED · request gpt-reserve · selected gpt-6-astra" in terminal.text() and "Model Guard held this input" in terminal.text())
+                # The prompt is held in the composer, or refused before any request
+                # when it is submitted before the guard's state reaches the screen.
+                terminal.wait(lambda: "STOPPED · request gpt-reserve · selected gpt-6-astra" in terminal.text()
+                              and ("Model Guard held this input" in terminal.text() or "Model Guard holds this thread" in terminal.text()))
                 for _ in range(10):
                     terminal.poll()
                 self.assertEqual([request["model"] for request in api.requests], ["gpt-reserve"])

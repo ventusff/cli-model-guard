@@ -79,10 +79,10 @@ lockfile and the protocol schemas, writes the six patches back, pins the tag,
 commit, Rust version, patch and helper digests in `release.json`, bumps the
 plugin version everywhere and rewrites the version strings in the
 documentation (`rebase.py finish`), builds the package (`build.py`), and runs
-clippy, the guard's Rust tests and the core routing test. Clippy judges the
-patches, not upstream: `clippy_gate.py` compares the patched source with the
-official one, linted once per Codex release, Rust version and lockfile, and
-fails only on a diagnostic the patches add. On the host it runs the Python
+clippy, the guard's Rust tests in core and the TUI and the core routing tests.
+Clippy judges the patches, not upstream: `clippy_gate.py` compares the patched
+source with the official one, linted once per Codex release, Rust version and
+lockfile, and fails only on a diagnostic the patches add. On the host it runs the Python
 unit, fixture and PTY tests against the archive and the Claude suite, records
 the archive digests (`rebase.py record`), commits to `main`, tags
 `v<plugin version>` and publishes the GitHub release with the archive. A run
@@ -131,7 +131,7 @@ Run Rust checks with the upstream runner from `source/codex-rs`:
 ```sh
 just fmt
 just test -p codex-api -E 'test(process_sse)'
-just test -p codex-core -E 'test(model_routing)'
+just test -p codex-core -E 'test(model_guard) | test(model_routing)'
 INSTA_WORKSPACE_ROOT="$PWD" just test -p codex-tui -E 'test(native_guard)'
 INSTA_WORKSPACE_ROOT="$PWD" just test -p codex-app-server-protocol -p codex-tui
 just test
