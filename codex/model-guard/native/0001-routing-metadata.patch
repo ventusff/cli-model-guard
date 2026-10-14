@@ -32,7 +32,7 @@ index 3e73b44f..92bf505b 100644
      AuthRecoveryStarted => "modelProvider/authRecoveryStarted" (v2::AuthRecoveryNotification),
      AuthRecoveryCompleted => "modelProvider/authRecoveryCompleted" (v2::AuthRecoveryNotification),
 diff --git a/codex-rs/app-server-protocol/src/protocol/v2/model.rs b/codex-rs/app-server-protocol/src/protocol/v2/model.rs
-index c9a68ac3..4e0dffe4 100644
+index c9a68ac3..a62efc4a 100644
 --- a/codex-rs/app-server-protocol/src/protocol/v2/model.rs
 +++ b/codex-rs/app-server-protocol/src/protocol/v2/model.rs
 @@ -7,6 +7,8 @@ use codex_protocol::openai_models::ModelAccessPrograms as CoreModelAccessProgram
@@ -44,7 +44,7 @@ index c9a68ac3..4e0dffe4 100644
  use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
  use codex_protocol::protocol::ModelVerification as CoreModelVerification;
  use codex_protocol::protocol::MultiAgentVersion as CoreMultiAgentVersion;
-@@ -192,6 +194,72 @@ pub struct ModelReroutedNotification {
+@@ -192,6 +194,82 @@ pub struct ModelReroutedNotification {
      pub reason: ModelRerouteReason,
  }
  
@@ -98,12 +98,22 @@ index c9a68ac3..4e0dffe4 100644
 +    pub reasoning_hits: Option<u32>,
 +}
 +
++/// The Model Guard release this process is built from, set by the package
++/// build. Model Guard decides in the process that hosts a thread, so a client
++/// compares it with the version a server reports.
++pub const MODEL_GUARD_VERSION: &str = match option_env!("MODEL_GUARD_VERSION") {
++    Some(version) => version,
++    None => "dev",
++};
++
 +#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 +#[serde(rename_all = "camelCase")]
 +#[ts(export_to = "v2/")]
 +pub struct ThreadModelGuardUpdateResponse {
 +    /// Null when Model Guard does not follow the thread.
 +    pub guard: Option<ModelGuardState>,
++    /// The Model Guard release of the process hosting the thread.
++    pub version: String,
 +}
 +
 +#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
@@ -183,16 +193,17 @@ index 4223ea79..11335ca3 100644
          | ServerNotification::AuthRecoveryStarted(_)
          | ServerNotification::AuthRecoveryCompleted(_)
 diff --git a/codex-rs/app-server/src/request_processors/thread_processor.rs b/codex-rs/app-server/src/request_processors/thread_processor.rs
-index 8bdf6bbe..c0a31353 100644
+index 8bdf6bbe..60994645 100644
 --- a/codex-rs/app-server/src/request_processors/thread_processor.rs
 +++ b/codex-rs/app-server/src/request_processors/thread_processor.rs
-@@ -746,6 +746,38 @@ impl ThreadRequestProcessor {
+@@ -746,6 +746,42 @@ impl ThreadRequestProcessor {
              .map(|response| Some(response.into()))
      }
  
 +    /// Reads Model Guard's state for a thread, records the user's selection
-+    /// of a model, or holds the thread for the client's reasoning heuristic.
-+    /// A change is announced to every client, as the guard's own changes are.
++    /// of a model, or holds the thread for the client's reasoning heuristic,
++    /// and names this process's Model Guard release. A change is announced to
++    /// every client, as the guard's own changes are.
 +    pub(crate) async fn thread_model_guard_update(
 +        &self,
 +        params: codex_app_server_protocol::ThreadModelGuardUpdateParams,
@@ -218,7 +229,10 @@ index 8bdf6bbe..c0a31353 100644
 +                ))
 +                .await;
 +        }
-+        let response = codex_app_server_protocol::ThreadModelGuardUpdateResponse { guard };
++        let response = codex_app_server_protocol::ThreadModelGuardUpdateResponse {
++            guard,
++            version: codex_app_server_protocol::MODEL_GUARD_VERSION.to_string(),
++        };
 +        Ok(Some(response.into()))
 +    }
 +

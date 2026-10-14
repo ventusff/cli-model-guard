@@ -1,3 +1,18 @@
+diff --git a/codex-rs/app-server-client/src/lib.rs b/codex-rs/app-server-client/src/lib.rs
+index df5dc3e9..2251c472 100644
+--- a/codex-rs/app-server-client/src/lib.rs
++++ b/codex-rs/app-server-client/src/lib.rs
+@@ -81,6 +81,10 @@ pub mod legacy_core {
+             pub use codex_core::config::edit::*;
+         }
+     }
++
++    pub mod model_guard {
++        pub use codex_core::model_guard::enabled;
++    }
+ }
+ 
+ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 diff --git a/codex-rs/tui/src/app.rs b/codex-rs/tui/src/app.rs
 index 5dfc3ad7..df1e085c 100644
 --- a/codex-rs/tui/src/app.rs
@@ -89,10 +104,10 @@ index dca0c9da..fe317a55 100644
          let clear_default_ultra = self
 diff --git a/codex-rs/tui/src/app/model_guard.rs b/codex-rs/tui/src/app/model_guard.rs
 new file mode 100644
-index 00000000..3c18c3aa
+index 00000000..1d8e5391
 --- /dev/null
 +++ b/codex-rs/tui/src/app/model_guard.rs
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,86 @@
 +//! Requests to Model Guard in the process running a thread.
 +//!
 +//! The event loop waits for each reply, so the guard learns of a selection
@@ -132,7 +147,9 @@ index 00000000..3c18c3aa
 +
 +    /// Reads the guard's state for `thread_id`, or records the user's
 +    /// selection of a model or a reasoning-heuristic hold, and shows the
-+    /// state the guard reports when the thread is still the one shown.
++    /// state the guard reports when the thread is still the one shown. A read
++    /// answered by a server without this build's guard is reported as an
++    /// error, since that server hosts the thread unguarded.
 +    pub(super) async fn update_model_guard(
 +        &mut self,
 +        app_server: &AppServerSession,
@@ -140,6 +157,7 @@ index 00000000..3c18c3aa
 +        select_model: Option<String>,
 +        reasoning_hits: Option<u32>,
 +    ) {
++        let read = select_model.is_none() && reasoning_hits.is_none();
 +        let result = app_server
 +            .request_handle()
 +            .request_typed::<ThreadModelGuardUpdateResponse>(
@@ -153,13 +171,26 @@ index 00000000..3c18c3aa
 +                },
 +            )
 +            .await;
-+        match result {
-+            Ok(response) => {
-+                if self.chat_widget.thread_id() == Some(thread_id) {
-+                    self.chat_widget.on_model_guard_state(response.guard);
-+                }
-+            }
-+            Err(err) => tracing::warn!(%thread_id, "Model Guard request failed: {err}"),
++        if let Err(err) = &result {
++            tracing::warn!(%thread_id, "Model Guard request failed: {err}");
++        }
++        let release = result
++            .as_ref()
++            .ok()
++            .map(|response| response.version.as_str());
++        let shown = self.chat_widget.thread_id() == Some(thread_id);
++        if shown
++            && read
++            && codex_app_server_client::legacy_core::model_guard::enabled(&self.config)
++            && let Some(message) = crate::model_guard_server::thread_message(
++                release,
++                crate::chatwidget::model_guard::language_zh(),
++            )
++        {
++            self.chat_widget.add_error_message(message);
++        }
++        if shown && let Ok(response) = result {
++            self.chat_widget.on_model_guard_state(response.guard);
 +        }
 +    }
 +}
@@ -332,10 +363,10 @@ index e20aaa3a..88352d24 100644
          {
 diff --git a/codex-rs/tui/src/chatwidget/model_guard.rs b/codex-rs/tui/src/chatwidget/model_guard.rs
 new file mode 100644
-index 00000000..89eda489
+index 00000000..2f201f3d
 --- /dev/null
 +++ b/codex-rs/tui/src/chatwidget/model_guard.rs
-@@ -0,0 +1,438 @@
+@@ -0,0 +1,443 @@
 +//! Model Guard's surface for this widget's thread.
 +//!
 +//! The guard itself runs where the thread's model requests are made: it holds
@@ -391,6 +422,11 @@ index 00000000..89eda489
 +            })
 +            .unwrap_or_default()
 +    }
++}
++
++/// Whether the guard's messages are in Chinese.
++pub(crate) fn language_zh() -> bool {
++    GuardSettings::read().language == "zh"
 +}
 +
 +#[derive(Clone, Debug, PartialEq, Eq)]
@@ -1396,3 +1432,157 @@ index 46727cfc..a0564d2c 100644
      snapshot: &RateLimitSnapshotDisplay,
  ) -> Option<(&RateLimitWindowDisplay, bool)> {
      find_codex_window(snapshot, "weekly")
+diff --git a/codex-rs/tui/src/lib.rs b/codex-rs/tui/src/lib.rs
+index dc0fbd05..b7c63193 100644
+--- a/codex-rs/tui/src/lib.rs
++++ b/codex-rs/tui/src/lib.rs
+@@ -2349,6 +2349,7 @@ fn should_show_bedrock_setup_wizard(
+ mod daemon_recovery;
+ mod daemon_startup;
+ mod daemon_telemetry;
++mod model_guard_server;
+ 
+ #[cfg(test)]
+ #[path = "daemon_startup_tests.rs"]
+diff --git a/codex-rs/tui/src/model_guard_server.rs b/codex-rs/tui/src/model_guard_server.rs
+new file mode 100644
+index 00000000..828ae4a6
+--- /dev/null
++++ b/codex-rs/tui/src/model_guard_server.rs
+@@ -0,0 +1,104 @@
++//! Model Guard decides in the process that hosts a thread, so a background
++//! server of another build hosts threads without it. When the guard is
++//! enabled, a session declines such a server and runs its threads itself, and
++//! says how to switch the server to this build.
++
++use super::*;
++use codex_app_server_protocol::ClientRequest;
++use codex_app_server_protocol::MODEL_GUARD_VERSION;
++use codex_app_server_protocol::RequestId;
++use codex_app_server_protocol::ThreadModelGuardUpdateParams;
++use codex_app_server_protocol::ThreadModelGuardUpdateResponse;
++use codex_protocol::ThreadId;
++
++const SWITCH: &str = "codex app-server daemon update --from-cli";
++
++/// The startup line for a background server that does not run this build's
++/// guard, or `None` when it does.
++pub(crate) fn startup_message(release: Option<&str>, zh: bool) -> Option<String> {
++    let found = found(release.unwrap_or_default(), zh)?;
++    Some(if zh {
++        format!(
++            "这次不连 Codex 的后台服务，对话由本窗口自己承载：后台服务跑的是{found}，Model Guard {MODEL_GUARD_VERSION} 只守护本版本承载的对话。`{SWITCH}` 把后台服务换成本版本；换的时候后台服务会重启，连在上面的会话里正在做的事会被打断。"
++        )
++    } else {
++        format!(
++            "Running without the shared background server, with this session's threads hosted here: the server runs {found}, and Model Guard {MODEL_GUARD_VERSION} guards only threads this build hosts. `{SWITCH}` switches the server to this build; it restarts the server and interrupts work in the sessions attached to it."
++        )
++    })
++}
++
++/// The error for a thread whose hosting server does not run this build's
++/// guard, or `None` when it does.
++pub(crate) fn thread_message(release: Option<&str>, zh: bool) -> Option<String> {
++    let found = found(release.unwrap_or_default(), zh)?;
++    Some(if zh {
++        format!(
++            "Model Guard 没有守护这个对话：承载它的后台服务跑的是{found}。退出后重新启动 Codex，对话就由本窗口自己承载；或者用 `{SWITCH}` 把后台服务换成本版本。"
++        )
++    } else {
++        format!(
++            "Model Guard is not guarding this thread: the server hosting it runs {found}. Quit and start Codex again to host the thread in this session, or switch the server to this build with `{SWITCH}`."
++        )
++    })
++}
++
++/// What the server runs, when it is not this build's guard.
++fn found(release: &str, zh: bool) -> Option<String> {
++    match release {
++        MODEL_GUARD_VERSION => None,
++        "" if zh => Some("不带 Model Guard 的 Codex".to_string()),
++        "" => Some("Codex without Model Guard".to_string()),
++        other => Some(format!("Model Guard {}", sanitized(other))),
++    }
++}
++
++fn sanitized(release: &str) -> String {
++    release
++        .chars()
++        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+'))
++        .take(40)
++        .collect()
++}
++
++/// Asks the local background server which Model Guard release hosts its
++/// threads; the reply for a fresh thread id carries the release and no state.
++pub(crate) async fn startup_check(
++    target: &AppServerTarget,
++    config: &crate::legacy_core::config::Config,
++) -> Option<String> {
++    if !matches!(target, AppServerTarget::LocalDaemon { .. })
++        || !codex_app_server_client::legacy_core::model_guard::enabled(config)
++    {
++        return None;
++    }
++    let reply = match app_server_connection::connect(target).await {
++        Ok(client) => {
++            let reply = client
++                .request_handle()
++                .request_typed::<ThreadModelGuardUpdateResponse>(
++                    ClientRequest::ThreadModelGuardUpdate {
++                        request_id: RequestId::String("tui-model-guard-server".to_string()),
++                        params: ThreadModelGuardUpdateParams {
++                            thread_id: ThreadId::new().to_string(),
++                            select_model: None,
++                            reasoning_hits: None,
++                        },
++                    },
++                )
++                .await
++                .ok();
++            let _ = client.shutdown().await;
++            reply
++        }
++        Err(_) => None,
++    };
++    startup_message(
++        reply.as_ref().map(|reply| reply.version.as_str()),
++        crate::chatwidget::model_guard::language_zh(),
++    )
++}
++
++#[cfg(test)]
++#[path = "model_guard_server_tests.rs"]
++mod tests;
+diff --git a/codex-rs/tui/src/startup_orchestration.rs b/codex-rs/tui/src/startup_orchestration.rs
+index e09f18a2..ccb8c69a 100644
+--- a/codex-rs/tui/src/startup_orchestration.rs
++++ b/codex-rs/tui/src/startup_orchestration.rs
+@@ -594,12 +594,27 @@ pub(super) async fn run_main_inner(
+         app_server_target = AppServerTarget::Embedded;
+         daemon_exclusion = Some("daemon feature settings");
+     }
++    let model_guard_warning = if compatibility_warning.is_none() && !cli.agents_overview {
++        startup_draft
++            .run_until(model_guard_server::startup_check(
++                &app_server_target,
++                &config,
++            ))
++            .await?
++    } else {
++        None
++    };
++    if model_guard_warning.is_some() {
++        app_server_target = AppServerTarget::Embedded;
++        daemon_exclusion = Some("Model Guard");
++    }
+     if app_server_target.uses_embedded_network_policy() {
+         embedded_network_policy.activate(&mut config);
+     }
+     let daemon_startup_warning = elevated_warning
+         .map(str::to_string)
+         .or(compatibility_warning)
++        .or(model_guard_warning)
+         .or_else(|| {
+             daemon_exclusion
+             .filter(|_| auto_start_daemon)

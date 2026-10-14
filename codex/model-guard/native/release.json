@@ -1,5 +1,5 @@
 {
-  "plugin_version": "1.13.0",
+  "plugin_version": "1.14.0",
   "codex_version": "0.162.1",
   "upstream_repository": "https://github.com/openai/codex.git",
   "upstream_ref": "rust-v0.162.1",
@@ -9,19 +9,19 @@
   "patches": [
     {
       "file": "0001-routing-metadata.patch",
-      "sha256": "4766cf032d89e96f67f2647342cff24f0c0e64d4bcf99f9b4cefb1c1f5045874"
+      "sha256": "543e39dcbb1fc06b508f79e43774bf75e62a4b998333623be17a6756be1dc168"
     },
     {
       "file": "0002-native-status-line.patch",
-      "sha256": "34376d5c711dc3537285940bad9bd51dd05e06237a193b5a7b0e37b9a9fa4203"
+      "sha256": "0b9b7c2eeb7bdc7ae65751fa6a4727f765a8f6686f903f80f527fb6496ce4b33"
     },
     {
       "file": "0003-native-status-line-tests.patch",
-      "sha256": "e82fc3a9e1e710a2d7155e528f81dc945424b0cc636811495b9adc66d8a53adf"
+      "sha256": "f4ed02f9ba6a17590598dda6af6c701fc0489e059f97d789e30f7ac230d2a035"
     },
     {
       "file": "0004-protocol-schemas.patch",
-      "sha256": "a7267ab8c6b14fceecc33b06d1ed8875e0c61a84060fa3dbbad90c9cfc359e7b"
+      "sha256": "80c087c57284b8fbb209d3aaf41523a0806d8579a4c7f4b3c0de230d75144a76"
     },
     {
       "file": "0005-release-packaging.patch",
@@ -29,7 +29,7 @@
     },
     {
       "file": "0006-update-hand-off.patch",
-      "sha256": "99d1430cef2b1edaa7853a762c30fa12bbb71ff795a9e2cf5e59b72cfe66c0a9"
+      "sha256": "fd52c89e6f8822a2ec97e32b98d7c30d10b45e8281eeb340918a1f227ea83caf"
     }
   ],
   "helper_sha256": {
@@ -39,7 +39,7 @@
     "codex-path/rg": "e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849",
     "codex-resources/voice/manifest.json": "428d43ed092b11a0992f9f80c510b00b69034feb6dca786ab35b41b85eb5b0aa"
   },
-  "sha256": "44c2c46a6f7917e2f13cf108836143cd8f851798c11533ad1b731bc8bed7d09b",
-  "url": "https://github.com/ventusff/cli-model-guard/releases/download/v1.13.0/model-guard-codex-linux-x86_64.tar.gz",
-  "binary_sha256": "13b3a26b5d4082cee4e10359f322ba810c7e83cd638fdbd47e16ebefb701877a"
+  "sha256": "3b613d602f84e61908f38fc434665e7b7b91f275a76b09a25f07610e08f0c240",
+  "url": "https://github.com/ventusff/cli-model-guard/releases/download/v1.14.0/model-guard-codex-linux-x86_64.tar.gz",
+  "binary_sha256": "8122a5fc5197f9e4c1449354aa0e82358b704693d131d7b83a750675b0b52485"
 }

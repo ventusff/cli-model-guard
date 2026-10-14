@@ -1,5 +1,5 @@
 diff --git a/codex-rs/tui/src/update_action.rs b/codex-rs/tui/src/update_action.rs
-index 860d0bd1..ec4488ad 100644
+index 860d0bd1..7f0d5f18 100644
 --- a/codex-rs/tui/src/update_action.rs
 +++ b/codex-rs/tui/src/update_action.rs
 @@ -24,6 +24,9 @@ pub enum UpdateAction {
@@ -20,7 +20,7 @@ index 860d0bd1..ec4488ad 100644
          }
      }
  
-@@ -81,15 +85,136 @@ impl UpdateAction {
+@@ -81,15 +85,153 @@ impl UpdateAction {
  
  #[cfg(not(debug_assertions))]
  pub fn get_update_action() -> Option<UpdateAction> {
@@ -132,13 +132,27 @@ index 860d0bd1..ec4488ad 100644
 +    #[test]
 +    fn model_guard_auto_update_runs_once_per_release_and_respects_the_setting() {
 +        let root = tempfile::tempdir().expect("temp dir");
-+        assert_eq!(model_guard_auto_update_marker(root.path(), "1.11.0", "1.11.0"), None);
-+        let marker = model_guard_auto_update_marker(root.path(), "1.11.0", "1.10.0").expect("first attempt");
++        assert_eq!(
++            model_guard_auto_update_marker(root.path(), "1.11.0", "1.11.0"),
++            None
++        );
++        let marker =
++            model_guard_auto_update_marker(root.path(), "1.11.0", "1.10.0").expect("first attempt");
 +        assert_eq!(marker, root.path().join("auto-update.1.11.0"));
 +        std::fs::write(&marker, b"").expect("marker");
-+        assert_eq!(model_guard_auto_update_marker(root.path(), "1.11.0", "1.10.0"), None);
-+        std::fs::write(root.path().join("config.json"), br#"{"auto_update": false}"#).expect("config");
-+        assert_eq!(model_guard_auto_update_marker(root.path(), "1.12.0", "1.10.0"), None);
++        assert_eq!(
++            model_guard_auto_update_marker(root.path(), "1.11.0", "1.10.0"),
++            None
++        );
++        std::fs::write(
++            root.path().join("config.json"),
++            br#"{"auto_update": false}"#,
++        )
++        .expect("config");
++        assert_eq!(
++            model_guard_auto_update_marker(root.path(), "1.12.0", "1.10.0"),
++            None
++        );
 +        let bin = root.path().join("bin");
 +        std::fs::create_dir_all(&bin).expect("bin");
 +        std::fs::write(bin.join("model-guard-codex"), b"").expect("updater");
@@ -147,7 +161,10 @@ index 860d0bd1..ec4488ad 100644
 +            format!(r#"{{"entry": "{}"}}"#, bin.join("codex").display()),
 +        )
 +        .expect("state");
-+        assert_eq!(model_guard_updater(root.path()), bin.join("model-guard-codex"));
++        assert_eq!(
++            model_guard_updater(root.path()),
++            bin.join("model-guard-codex")
++        );
 +        assert_eq!(
 +            model_guard_updater(&root.path().join("elsewhere")),
 +            std::path::PathBuf::from("model-guard-codex")
@@ -158,28 +175,21 @@ index 860d0bd1..ec4488ad 100644
      fn maps_install_context_to_update_action() {
          let native_release_dir =
 diff --git a/codex-rs/tui/src/updates.rs b/codex-rs/tui/src/updates.rs
-index 9bbdf310..0936b529 100644
+index 9bbdf310..d570be0a 100644
 --- a/codex-rs/tui/src/updates.rs
 +++ b/codex-rs/tui/src/updates.rs
-@@ -60,6 +60,55 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
+@@ -60,6 +60,48 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
  // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
  const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
  const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
 +// A Model Guard build can only move to the Codex version its plugin tracks.
-+const MODEL_GUARD_RELEASE_URL: &str =
-+    "https://raw.githubusercontent.com/ventusff/cli-model-guard/main/codex/model-guard/native/release.json";
++const MODEL_GUARD_RELEASE_URL: &str = "https://raw.githubusercontent.com/ventusff/cli-model-guard/main/codex/model-guard/native/release.json";
 +
 +#[derive(Deserialize, Debug, Clone)]
 +struct ModelGuardRelease {
 +    codex_version: String,
 +    plugin_version: String,
 +}
-+
-+/// This build's plugin version, set by the package build.
-+const MODEL_GUARD_VERSION: &str = match option_env!("MODEL_GUARD_VERSION") {
-+    Some(version) => version,
-+    None => "dev",
-+};
 +
 +/// A Model Guard build installs the plugin's newer release itself, unless
 +/// `auto_update` is false in the installation's `config.json`: the updater
@@ -192,7 +202,7 @@ index 9bbdf310..0936b529 100644
 +    let Some(marker) = crate::update_action::model_guard_auto_update_marker(
 +        &root,
 +        &release.plugin_version,
-+        MODEL_GUARD_VERSION,
++        codex_app_server_protocol::MODEL_GUARD_VERSION,
 +    ) else {
 +        return;
 +    };
@@ -217,7 +227,7 @@ index 9bbdf310..0936b529 100644
  
  #[derive(Deserialize, Debug, Clone)]
  struct ReleaseInfo {
-@@ -113,6 +162,18 @@ async fn check_for_update(
+@@ -113,6 +155,18 @@ async fn check_for_update(
          Some(UpdateAction::StandaloneUnix) | Some(UpdateAction::StandaloneWindows) | None => {
              fetch_latest_github_release_version(&client_pool).await?
          }

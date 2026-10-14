@@ -796,3 +796,37 @@ index 00000000..afe17373
 +requested-model-with-a-long-revision-and
 +-deployment-name → gpt-4o · /model to   
 +continue
+diff --git a/codex-rs/tui/src/model_guard_server_tests.rs b/codex-rs/tui/src/model_guard_server_tests.rs
+new file mode 100644
+index 00000000..a6deba15
+--- /dev/null
++++ b/codex-rs/tui/src/model_guard_server_tests.rs
+@@ -0,0 +1,28 @@
++use super::*;
++use pretty_assertions::assert_eq;
++
++#[test]
++fn model_guard_server_of_this_build_needs_no_message() {
++    assert_eq!(startup_message(Some(MODEL_GUARD_VERSION), false), None);
++    assert_eq!(thread_message(Some(MODEL_GUARD_VERSION), true), None);
++}
++
++#[test]
++fn model_guard_server_without_the_guard_is_declined_with_the_switch_command() {
++    let message = startup_message(None, false).expect("a server without the guard is declined");
++    assert!(message.contains("runs Codex without Model Guard"));
++    assert!(message.contains(SWITCH));
++    assert!(message.contains("interrupts work"));
++    let message = thread_message(None, true).expect("an unguarded thread is reported");
++    assert!(message.contains("不带 Model Guard 的 Codex"));
++    assert!(message.contains(SWITCH));
++}
++
++#[test]
++fn model_guard_server_of_another_release_is_named_and_sanitized() {
++    let message = startup_message(Some("1.11.1\u{1b}[31m"), false).expect("another release");
++    assert!(message.contains("the server runs Model Guard 1.11.131m,"));
++    assert!(!message.contains('\u{1b}'));
++    let message = thread_message(Some("1.11.1"), false).expect("another release");
++    assert!(message.contains("runs Model Guard 1.11.1."));
++}

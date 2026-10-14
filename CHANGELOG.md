@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.14.0 — 2026-10-14
+
+- **Codex: a session never attaches to a background server that hosts threads without the guard.** Codex can host threads in a shared background server (`codex app-server daemon`), and the guard decides inside whichever process hosts a thread. A new session asks the local server which Model Guard release it runs; a server of another release, or official Codex, is declined: the session hosts its threads itself under the guard and says so in one line naming `codex app-server daemon update --from-cli`, the command that switches the server. A thread read from a server without this build's guard shows a red error.
+- **Codex: installing makes the background server this build.** With no server running, the installer selects and pins this build for the next start; a running server of another build is left running, since switching restarts it and interrupts the sessions attached to it, and the installer names the command. `model-guard-codex doctor` names the build the background server runs, and `remove` says how to return the server to official releases.
+- Claude Code: a recovery that outlives its session (the session ended or restarted while it ran) neither types into the terminal nor writes the session's state back.
+
 ## 1.13.0 — 2026-10-14
 
 - **Codex: the guard decides where Codex makes model requests.** A held thread sends no model request at all, whoever starts its turn: your prompt, `/compact`, a review, a queued command, a goal continuing on its own, a message from another thread, a voice handoff. A request for a model other than your selection is refused before it is sent, a response that discloses another model is cut off there, and the turn ends with a red error; an active goal stops instead of continuing. The hold belongs to the thread in the Codex process that hosts it, so switching threads, forks, side conversations, and quitting and resuming keep it; reviews, sub-agents and approval reviews run on their configured model and start held while the thread they work for is held.
