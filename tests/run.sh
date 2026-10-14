@@ -134,6 +134,7 @@ check "session start is silent" '[ -z "$out" ]'
 switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 auto >/dev/null
 hook "{hook_event_name:\"SessionEnd\",session_id:\"$s\",reason:\"other\"}" >/dev/null
 check "session end clears state" '[ ! -e "$(mg_state_file $s)" ]'
+check "a driver outliving its session writes nothing back" '! mg_episode_update $s ".status=\"switching\"" && [ ! -e "$(mg_state_file $s)" ] && [ ! -e "$(mg_state_file $s).lock" ]'
 printf 'RECOVER=off\n' > "$MODEL_GUARD_CONF"
 switch $s 'claude-fable-5-1[1m]' claude-opus-4-8 auto >/dev/null
 check "RECOVER=off disables everything" '[ ! -e "$(mg_state_file $s)" ]'

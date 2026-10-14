@@ -139,19 +139,20 @@ wait_state() {
 
 busy_before=$(mg_session_status "$sid" 2>/dev/null || printf unknown)
 sleep 0.2
-mg_state_update "$sid" '.status="switching" | .switching_at=$at' --arg at "$(date -Is)"
+mg_episode_update "$sid" '.status="switching" | .switching_at=$at' --arg at "$(date -Is)" \
+  || { say "episode ended before recovery"; exit 0; }
 send_key Escape escape 27
 say "sent Esc (session was $busy_before)"
 wait_idle 10
 sleep 0.5
 model_before=$(tcount '<command-name>/model</command-name>')
-mg_state_update "$sid" '.typed_switch=true'
+mg_episode_update "$sid" '.typed_switch=true' || { say "episode ended before /model"; exit 0; }
 send_line "/model $target"
 say "sent /model $target"
 if ! wait_state recovered 30; then
   st=$(mg_state_get "$sid" status)
   if [ "$st" = switching ]; then
-    mg_state_update "$sid" '.status="stopped" | .note="switch_not_observed" | .turn_stopped=true'
+    mg_episode_update "$sid" '.status="stopped" | .note="switch_not_observed" | .turn_stopped=true'
     say "model switch not observed within 30s; leaving the session stopped"
     mg_notify "$(mg_text notify_t)" "$(mg_text notify_fail "$dtarget" "switch not observed")"
   fi

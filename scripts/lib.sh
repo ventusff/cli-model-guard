@@ -174,13 +174,23 @@ mg_state_read() { cat "$(mg_state_file "$1")" 2>/dev/null || printf '{}'; }
 mg_state_get() { mg_state_read "$1" | jq -r --arg k "$2" 'if has($k) and .[$k] != null then .[$k] else empty end'; }
 
 # mg_state_update SID JQ_FILTER [jq args...]: read-modify-write under a lock.
-mg_state_update() {
-  local sid="$1" filter="$2"; shift 2
-  mkdir -p "$MG_STATE_DIR"; chmod 700 "$MG_STATE_DIR" 2>/dev/null || true
+mg_state_update() { mg_state_write "$1" create "${@:2}"; }
+
+# mg_episode_update SID JQ_FILTER [jq args...]: the same for the recovery
+# driver, applied only while the episode's state exists. A session that ended
+# or restarted cleared its episode, and a driver still running for it must not
+# write it back; returns 1 then.
+mg_episode_update() { mg_state_write "$1" existing "${@:2}"; }
+
+mg_state_write() {
+  local sid="$1" mode="$2" filter="$3"; shift 3
   local f lock tmp
   f=$(mg_state_file "$sid"); lock="$f.lock"; tmp="$f.tmp.$$"
+  [ "$mode" = create ] || [ -e "$f" ] || return 1
+  mkdir -p "$MG_STATE_DIR"; chmod 700 "$MG_STATE_DIR" 2>/dev/null || true
   (
     flock -w 5 9 || exit 1
+    if [ "$mode" = existing ] && [ ! -e "$f" ]; then rm -f "$lock"; exit 1; fi
     mg_state_read "$sid" | jq "$@" "$filter" > "$tmp" && mv "$tmp" "$f"
   ) 9>"$lock"
 }
