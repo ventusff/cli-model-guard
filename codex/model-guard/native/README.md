@@ -79,7 +79,10 @@ lockfile and the protocol schemas, writes the six patches back, pins the tag,
 commit, Rust version, patch and helper digests in `release.json`, bumps the
 plugin version everywhere and rewrites the version strings in the
 documentation (`rebase.py finish`), builds the package (`build.py`), and runs
-clippy, the guard's Rust tests and the core routing test. On the host it runs
+clippy, the guard's Rust tests and the core routing test. Clippy judges the
+patches, not upstream: `clippy_gate.py` compares the patched source with the
+official one, linted once per Codex release and Rust version, and fails only on
+a diagnostic the patches add. On the host it runs
 the Python unit, fixture and PTY tests against the archive and the Claude
 suite, records the archive digests (`rebase.py record`), commits to `main`,
 tags `v<plugin version>` and publishes the GitHub release with the archive.
@@ -87,7 +90,9 @@ tags `v<plugin version>` and publishes the GitHub release with the archive.
 A patch that no longer merges stops the command with the conflicting files
 listed. Resolve them in the work tree (`~/.cache/model-guard/release-<version>/source`),
 commit each resolved patch there under its own name, and run again with
-`--resume`, which skips the fetch and merge. `rebase.py patches --source <tree>`
+`--resume`, which skips the fetch and merge. `finish` drops the lockfile and
+schema commits an earlier run left in that tree and regenerates them, so a
+resumed run starts from the source patches. `rebase.py patches --source <tree>`
 alone rewrites the six patches from such a tree.
 
 Installed machines then move by themselves: the build's startup update check

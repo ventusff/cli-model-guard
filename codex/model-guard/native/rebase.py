@@ -122,6 +122,18 @@ def stage_commits(source):
     return log[0].split()[0], commits
 
 
+def drop_generated(source):
+    """Remove the lockfile and schema commits an earlier `finish` added, so the
+    tree carries the source patches only and the two are regenerated from it."""
+    log = git(source, "log", "--reverse", "--format=%H %s", capture=True).stdout.splitlines()
+    generated = [index for index, line in enumerate(log)
+                 if line.partition(" ")[2] in (PACKAGING_PATCH, SCHEMAS_PATCH)]
+    if generated:
+        if any(line.partition(" ")[2] in SOURCE_PATCHES for line in log[generated[0]:]):
+            raise RuntimeError("A source patch commit follows the generated lockfile or schema commit")
+        git(source, "reset", "--quiet", "--hard", log[generated[0] - 1].split()[0])
+
+
 def regenerate_packaging(source, cargo_env):
     """Apply the packaging patch minus the lockfile, then let Cargo rewrite the lockfile."""
     git(source, "apply", "--3way", "--whitespace=nowarn", "--exclude=codex-rs/Cargo.lock", HERE / PACKAGING_PATCH)
@@ -179,6 +191,7 @@ def finish(args):
     codex_version = tag.removeprefix("rust-v")
     cargo_env = dict(os.environ, CARGO_TARGET_DIR=str(args.target_dir or source / "codex-rs/target"),
                      RUSTUP_TOOLCHAIN=toolchain)
+    drop_generated(source)
     regenerate_packaging(source, cargo_env)
     regenerate_schemas(source, cargo_env)
     write_patches(source)

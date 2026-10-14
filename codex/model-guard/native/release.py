@@ -8,6 +8,10 @@ the Rust cases, the Python fixtures and the real PTY sessions, then commit,
 tag, push and publish the GitHub release with the archive. Everything heavy
 runs in Docker on this machine's cores; GitHub only receives the result.
 
+Clippy judges the patches, not upstream: `clippy_gate.py` compares the patched
+source with the official one (linted once per Codex release and Rust version,
+kept in the work directory) and fails only on diagnostics the patches add.
+
 `--dry-run` stops before the commit and restores the checkout. A patch that no
 longer merges stops the run with the conflicting files listed; resolve them in
 the work tree, commit each patch under its own name there, and run again with
@@ -128,9 +132,19 @@ def main():
     docker(image, mounts, "/work/source", f"""
 python3 /repo/codex/model-guard/native/rebase.py finish --source /work/source --official-package /official --tag {tag} --target-dir /work/target{version}
 python3 /repo/codex/model-guard/native/build.py --work-dir /work/build --official-package /official --jobs {args.jobs}
+baseline=/work/clippy-baseline-{upstream}-rust{rust}.json
+if [ ! -s "$baseline" ]; then
+  mkdir -p /work/clippy-baseline/source
+  git -C /work/build/source archive HEAD | tar -xf - -C /work/clippy-baseline/source
+  (cd /work/clippy-baseline/source && git apply --include=codex-rs/Cargo.lock /repo/codex/model-guard/native/0005-release-packaging.patch)
+  (cd /work/clippy-baseline/source/codex-rs && CARGO_TARGET_DIR=/work/clippy-baseline/target cargo clippy --locked -p codex-tui --tests -j {args.jobs} --message-format=json > "$baseline.part" || true)
+  mv "$baseline.part" "$baseline"
+  rm -rf /work/clippy-baseline
+fi
 cd /work/build/source/codex-rs
 export CARGO_TARGET_DIR=/work/build/target INSTA_WORKSPACE_ROOT=/work/build/source/codex-rs RUST_MIN_STACK=16777216
-cargo clippy --locked -p codex-tui --tests -j {args.jobs} -- -D warnings
+cargo clippy --locked -p codex-tui --tests -j {args.jobs} --message-format=json > /work/build/clippy.json || true
+python3 /repo/codex/model-guard/native/clippy_gate.py "$baseline" /work/build/clippy.json
 cargo test --locked -p codex-tui -j {args.jobs} --lib -- native_guard model_guard
 cargo test --locked -p codex-core -j {args.jobs} --test all -- model_routing
 """, args.jobs)
