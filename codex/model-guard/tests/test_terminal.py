@@ -298,6 +298,28 @@ class NativeTerminalTests(unittest.TestCase):
             finally:
                 terminal.close()
 
+    @unittest.skipUnless(os.environ.get("MODEL_GUARD_STOCK_BIN"), "requires the official comparison binary")
+    def test_a_background_server_without_the_guard_is_declined(self):
+        binary = os.environ["MODEL_GUARD_NATIVE_BIN"]
+        with fixture_dir("mg-native-server-") as temp, ResponsesFixture("gpt-4o") as api:
+            base = Path(temp)
+            env = fixture_home(base, api)
+            # Official Codex runs the home's background server, which hosts threads without the guard.
+            subprocess.run([os.environ["MODEL_GUARD_STOCK_BIN"], "app-server", "daemon", "start"], env=env, cwd=base,
+                           capture_output=True, text=True, timeout=120, check=True)
+            stock_server = fixture_daemons(base)
+            self.assertTrue(stock_server)
+            terminal = Terminal([binary, "--sandbox", "read-only", "--ask-for-approval", "never", "Reply OK."], env, base)
+            try:
+                # The session hosts its thread itself, where the guard ends the disclosed route.
+                terminal.wait(lambda: "without the shared background server" in terminal.text()
+                              and "STOPPED · ROUTE DIFF gpt-6-astra" in terminal.text())
+                self.assertIn("codex app-server daemon update --from-cli", " ".join(terminal.text().split()))
+                self.assertEqual(len(thread_requests(api)), 1)
+                # The official server keeps running untouched.
+                self.assertTrue(set(stock_server) <= set(fixture_daemons(base)))
+            finally:
+                terminal.close()
 
     @unittest.skipUnless(os.environ.get("MODEL_GUARD_STOCK_BIN"), "requires the official comparison binary")
     def test_native_preserves_stock_scrollback_and_terminal_modes(self):

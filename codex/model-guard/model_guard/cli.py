@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from . import __version__, sessions
+from . import __version__, daemon, sessions
 from .launcher import data_home, find_codex, run
 
 
@@ -54,6 +54,8 @@ def command_doctor(args):
         print("The entry runs another executable, usually because an official installer or `codex update` replaced it; `model-guard-codex update` puts Model Guard back on the plugin's current Codex version.")
     elif official and state.get("codex_version") and official != state["codex_version"]:
         print("The official package and this build differ; `model-guard-codex update` moves both to the plugin's current Codex version.")
+    if intact:
+        print(daemon.describe(state.get("codex_version", "") + "+model-guard." + __version__, state["binary_sha256"], binary))
     stale = sessions.not_running(binary)
     if stale:
         print(f"{len(stale)} running Codex session(s) still use another executable; finish or /quit each one, then `codex resume` in its directory:")

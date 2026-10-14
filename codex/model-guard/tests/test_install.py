@@ -47,7 +47,7 @@ class InstallTests(unittest.TestCase):
             legacy_codex.chmod(0o755)
             real_run = subprocess.run
             actual_check_output = subprocess.check_output
-            with patch.dict(os.environ, {"MODEL_GUARD_CODEX_HOME": str(root)}), patch("model_guard.install.venv.create"), patch("model_guard.sessions.running", return_value=[]), patch("model_guard.sessions.executables", return_value=[]), patch("model_guard.install.subprocess.run", side_effect=lambda args, **kw: None if "pip" in args else real_run(args, **kw)):
+            with patch.dict(os.environ, {"MODEL_GUARD_CODEX_HOME": str(root)}), patch("model_guard.install.venv.create"), patch("model_guard.sessions.running", return_value=[]), patch("model_guard.sessions.executables", return_value=[]), patch("model_guard.daemon.adopt", return_value=None) as adopt, patch("model_guard.daemon.selected_version", return_value=None), patch("model_guard.install.subprocess.run", side_effect=lambda args, **kw: None if "pip" in args else real_run(args, **kw)):
                 for _ in range(2):
                     state_before = (root / "install.json").read_text()
                     entry_before = os.readlink(entry)
@@ -82,6 +82,8 @@ class InstallTests(unittest.TestCase):
                         (root / "install.json").write_text(state_before)
                     install(source, "zh", archive, entry)
                     self.assertEqual(os.readlink(entry), json.loads((root / "install.json").read_text())["native_binary"])
+                    installed = json.loads((root / "install.json").read_text())
+                    adopt.assert_called_with(Path(installed["native_binary"]), f"0.153.4+model-guard.{__version__}", installed["binary_sha256"])
                 self.assertEqual(actual_check_output([str(entry), "resume", "--last"], text=True), "native:resume\nnative:--last\n")
                 self.assertEqual(rc.read_text(), "# before\n# user's later edit\n")
                 remove()

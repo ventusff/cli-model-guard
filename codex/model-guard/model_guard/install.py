@@ -19,7 +19,7 @@ import urllib.request
 import uuid
 import venv
 
-from . import __version__, sessions
+from . import __version__, daemon, sessions
 from .launcher import atomic_json, data_home
 
 
@@ -272,6 +272,9 @@ def install_locked(source, language, native_package, entry):
     print(f"Installed native Model Guard {__version__}. New codex and cx invocations use it, including resume and fork.")
     if removed:
         print(f"Removed {len(removed)} unused earlier package(s) and environment(s).")
+    server = daemon.adopt(package / "bin/codex", release["codex_version"] + "+model-guard." + __version__, state["binary_sha256"])
+    if server:
+        print(server)
     stale = sessions.not_running(package / "bin/codex")
     if stale:
         print(f"{len(stale)} running Codex session(s) keep their current executable and do not show Model Guard. "
@@ -304,6 +307,9 @@ def remove_locked():
         if tools_entry.is_symlink() and tools_entry.resolve() == (root / "bin/model-guard-codex").resolve():
             tools_entry.unlink()
     print(("Restored the official Codex entry." if restored else "Preserved the existing Codex entry.") + " Running sessions, packages, preferences and backups are retained.")
+    if restored and "+model-guard." in (daemon.selected_version(state["entry"]) or ""):
+        print("Codex's background server still starts Model Guard's build; `codex app-server daemon update` returns it "
+              "to official releases and restarts it, which interrupts work in the sessions attached to it.")
     return 0
 
 
