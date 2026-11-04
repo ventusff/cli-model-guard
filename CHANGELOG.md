@@ -4,6 +4,7 @@
 
 - **Codex: a session never attaches to a background server that hosts threads without the guard.** Codex can host threads in a shared background server (`codex app-server daemon`), and the guard decides inside whichever process hosts a thread. A new session asks the local server which Model Guard release it runs; a server of another release, or official Codex, is declined: the session hosts its threads itself under the guard and says so in one line naming `codex app-server daemon update --from-cli`, the command that switches the server. A thread read from a server without this build's guard shows a red error.
 - **Codex: installing makes the background server this build.** With no server running, the installer selects and pins this build for the next start; a running server of another build is left running, since switching restarts it and interrupts the sessions attached to it, and the installer names the command. `model-guard-codex doctor` names the build the background server runs, and `remove` says how to return the server to official releases.
+- Codex: a launcher of your own at `~/.local/bin/codex` (a script that wraps Codex) is kept by install, update and removal. It runs the build `install.json`'s `native_binary` names; `doctor` and `update` judge the entry by what it runs, not by whether it is a symlink.
 - Claude Code: a recovery that outlives its session (the session ended or restarted while it ran) neither types into the terminal nor writes the session's state back.
 
 ## 1.13.0 — 2026-10-14

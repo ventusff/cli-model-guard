@@ -5,6 +5,8 @@ two halves: the official standalone package is brought to that version with
 OpenAI's own installer, which also makes it the entry again, and the new
 plugin source then installs its native package on top. The new source runs its
 own installer, so the version checks are the new release's, not this one's.
+A launcher another tool keeps at the entry is put back after OpenAI's
+installer replaced it.
 """
 
 import json
@@ -15,6 +17,7 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
+import uuid
 
 from . import __version__
 from .launcher import data_home
@@ -68,7 +71,23 @@ def install_official(version):
                    check=True, env={**os.environ, "CODEX_NON_INTERACTIVE": "1"})
 
 
+def install_official_keeping(entry, version):
+    """Install official Codex `version`, keeping a launcher that occupies `entry`."""
+    launcher = None if entry.is_symlink() or not entry.is_file() else (entry.read_bytes(), entry.stat().st_mode & 0o777)
+    install_official(version)
+    if launcher and (entry.is_symlink() or not entry.is_file() or entry.read_bytes() != launcher[0]):
+        temporary = entry.with_name(entry.name + ".model-guard-" + uuid.uuid4().hex)
+        try:
+            temporary.write_bytes(launcher[0])
+            temporary.chmod(launcher[1])
+            temporary.replace(entry)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
 def update(source=None, language=None):
+    from .install import entry_runs
+
     state_path = data_home() / "install.json"
     state = json.loads(state_path.read_text()) if state_path.is_file() else {}
     entry = Path(state.get("entry") or Path.home() / ".local/bin/codex")
@@ -76,13 +95,14 @@ def update(source=None, language=None):
         source = Path(source).resolve() if source else fetch_source(Path(temporary))
         release = json.loads((source / "native/release.json").read_text())
         version = source_version(source)
-        active = entry.is_symlink() and state.get("native_binary") and entry.resolve() == Path(state["native_binary"]).resolve()
+        active = bool(state.get("native_binary")) and entry_runs(
+            entry, state["native_binary"], f"{state.get('codex_version')}+model-guard.{state.get('version')}")
         if version == __version__ and state.get("upstream_commit") == release["upstream_commit"] and active:
             print(f"Model Guard {version} on Codex {release['codex_version']} is already installed and active.")
             return 0
         if official_version() != release["codex_version"]:
             print(f"Installing official Codex {release['codex_version']} first.", flush=True)
-            install_official(release["codex_version"])
+            install_official_keeping(entry, release["codex_version"])
         command = [sys.executable, str(source / "scripts/install.py")]
         if language:
             command += ["--language", language]

@@ -1,4 +1,11 @@
-"""Install a native Codex package with a reversible executable symlink."""
+"""Install a native Codex package behind the `codex` entry.
+
+The entry is either the official standalone symlink, which the installer
+points at the native package and restores on removal, or a launcher another
+tool owns (an executable that execs the `native_binary` named in
+`install.json`), which the installer leaves in place and drives through that
+file.
+"""
 
 import argparse
 from contextlib import contextmanager
@@ -21,6 +28,7 @@ import venv
 
 from . import __version__, daemon, sessions
 from .launcher import atomic_json, data_home
+from .update import codex_home
 
 
 START = "# >>> model-guard-codex >>>"
@@ -78,6 +86,29 @@ def link(path, target):
 def sha256(path):
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def reported_version(executable):
+    """What `executable --version` prints, or None when it cannot run."""
+    try:
+        return subprocess.run([str(executable), "--version"], capture_output=True, text=True, timeout=30).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def entry_runs(entry, binary, version):
+    """Whether invoking `entry` runs the native `binary`, which reports `version`.
+
+    A symlink entry runs what it resolves to. A launcher runs whatever it
+    execs, so it is asked: it runs this build when `--version` names it.
+    """
+    if entry.is_symlink():
+        return entry.resolve() == Path(binary).resolve()
+    return entry.is_file() and reported_version(entry) == "codex-cli " + version
+
+
+def entry_identity(entry):
+    return ("link", os.readlink(entry)) if entry.is_symlink() else ("launcher", sha256(entry))
 
 
 @contextmanager
@@ -171,24 +202,27 @@ def install_locked(source, language, native_package, entry):
     if (platform.system(), platform.machine()) != ("Linux", "x86_64"):
         raise RuntimeError("This prebuilt package supports Linux x86_64; use the documented source build on other platforms")
     libc, version = platform.libc_ver()
-    if libc != "glibc" or tuple(map(int, version.split(".")[:2])) < (2, 39):
-        raise RuntimeError("This native package requires glibc 2.39 or newer")
+    if libc != "glibc" or tuple(map(int, version.split(".")[:2])) < (2, 36):
+        raise RuntimeError("This native package requires glibc 2.36 or newer")
     root = data_home().expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     root.chmod(0o700)
     state_path = root / "install.json"
     previous = json.loads(state_path.read_text()) if state_path.exists() else {}
     entry = Path(entry or previous.get("entry") or Path.home() / ".local/bin/codex").absolute()
-    if not entry.is_symlink():
-        raise RuntimeError(f"Expected the official standalone Codex symlink at {entry}; refusing to replace an unmanaged file")
-    current_target = os.readlink(entry)
-    if previous.get("native_binary") and Path(previous["native_binary"]).resolve() == entry.resolve():
+    launcher = not entry.is_symlink()
+    if launcher and not (entry.is_file() and os.access(entry, os.X_OK)):
+        raise RuntimeError(f"Expected the official standalone Codex symlink or an executable launcher at {entry}")
+    identity = entry_identity(entry)
+    if launcher:
+        original = previous.get("original_entry") or str(codex_home() / "packages/standalone/current/bin/codex")
+    elif previous.get("native_binary") and Path(previous["native_binary"]).resolve() == entry.resolve():
         original = previous["original_entry"]
     else:
-        output = subprocess.check_output([str(entry), "--version"], text=True).strip()
-        if output != "codex-cli " + release["codex_version"]:
-            raise RuntimeError("Native package and installed official Codex versions must match")
-        original = current_target
+        original = os.readlink(entry)
+    official = Path(original) if Path(original).is_absolute() else entry.parent / original
+    if reported_version(official) != "codex-cli " + release["codex_version"]:
+        raise RuntimeError(f"Native package and installed official Codex versions must match ({official})")
     tools_entry = entry.with_name("model-guard-codex")
     managed_tools = root / "bin/model-guard-codex"
     if os.path.lexists(tools_entry) and (not tools_entry.is_symlink() or tools_entry.resolve() != managed_tools.resolve()):
@@ -213,8 +247,8 @@ def install_locked(source, language, native_package, entry):
         with tarfile.open(archive, "r:gz") as bundle:
             bundle.extractall(unpacked, filter="data")
         binary = unpacked / "bin/codex"
-        output = subprocess.check_output([str(binary), "--version"], text=True).strip()
-        if output != "codex-cli " + release["codex_version"] + "+model-guard." + __version__:
+        native_version = release["codex_version"] + "+model-guard." + __version__
+        if reported_version(binary) != "codex-cli " + native_version:
             raise RuntimeError("The package is not the expected native Model Guard build")
         identifier = __version__ + "-" + uuid.uuid4().hex[:8]
         environment = root / "envs" / identifier
@@ -225,7 +259,7 @@ def install_locked(source, language, native_package, entry):
         package = root / "native" / identifier
         package.parent.mkdir(exist_ok=True)
         unpacked.rename(package)
-    if not entry.is_symlink() or os.readlink(entry) != current_target:
+    if entry.is_symlink() == launcher or entry_identity(entry) != identity:
         raise RuntimeError("Codex entry changed during preparation; refusing to overwrite another update")
     cfg_path = root / "config.json"
     cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {"language": "en", "show_account": True, "auto_update": True}
@@ -248,7 +282,11 @@ def install_locked(source, language, native_package, entry):
             changed.append((path, str(target), old))
         atomic_json(state_path, state)
         published = True
-        link(entry, package / "bin/codex")
+        if not launcher:
+            link(entry, package / "bin/codex")
+        elif not entry_runs(entry, package / "bin/codex", native_version):
+            raise RuntimeError(f"The launcher at {entry} does not run Model Guard's build; it must exec the "
+                               f"native_binary named in {state_path}")
     except BaseException:
         for path, target, old in reversed(changed):
             # Preserve a concurrent manual change made outside the installer lock.
@@ -272,7 +310,7 @@ def install_locked(source, language, native_package, entry):
     print(f"Installed native Model Guard {__version__}. New codex and cx invocations use it, including resume and fork.")
     if removed:
         print(f"Removed {len(removed)} unused earlier package(s) and environment(s).")
-    server = daemon.adopt(package / "bin/codex", release["codex_version"] + "+model-guard." + __version__, state["binary_sha256"])
+    server = daemon.adopt(package / "bin/codex", native_version, state["binary_sha256"])
     if server:
         print(server)
     stale = sessions.not_running(package / "bin/codex")
@@ -296,7 +334,11 @@ def remove_locked():
     restored = False
     if state.get("native_binary"):
         entry = Path(state["entry"])
-        if entry.is_symlink() and entry.resolve() == Path(state["native_binary"]).resolve():
+        if not entry.is_symlink():
+            # The launcher execs install.json's native_binary; without one it runs the official package.
+            atomic_json(path, {name: value for name, value in state.items() if name != "native_binary"})
+            restored = True
+        elif entry.resolve() == Path(state["native_binary"]).resolve():
             original = Path(state["original_entry"])
             original = original if original.is_absolute() else entry.parent / original
             if not original.is_file() or not os.access(original, os.X_OK):

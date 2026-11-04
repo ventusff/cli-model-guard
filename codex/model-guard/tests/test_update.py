@@ -57,6 +57,32 @@ class UpdateTests(unittest.TestCase):
                 self.assertEqual(installed, ["0.155.1"])
                 self.assertEqual(json.loads((source / "scripts/argv.json").read_text()), [])
 
+    def test_update_puts_back_a_launcher_the_official_installer_replaced(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            guard, codex_home = home / "guard", home / "codex"
+            guard.mkdir()
+            package = codex_home / "packages/standalone/current"
+            package.mkdir(parents=True)
+            (package / "codex-package.json").write_text(json.dumps({"version": "0.153.4"}))
+            entry = home / "bin/codex"
+            entry.parent.mkdir()
+            entry.write_text("#!/bin/sh\nexec launcher\n")
+            entry.chmod(0o750)
+            (guard / "install.json").write_text(json.dumps({"entry": str(entry)}))
+            source = plugin_source(home / "source", "9.9.9", "0.155.1", "new")
+
+            def install_official(version):
+                entry.replace(entry.with_name("displaced"))
+                entry.symlink_to(package / "bin/codex")
+
+            with patch.dict(os.environ, {"MODEL_GUARD_CODEX_HOME": str(guard), "CODEX_HOME": str(codex_home)}), patch("model_guard.update.install_official", side_effect=install_official), patch("sys.stdout", new_callable=io.StringIO):
+                self.assertEqual(update.update(source), 0)
+            self.assertFalse(entry.is_symlink())
+            self.assertEqual(entry.read_text(), "#!/bin/sh\nexec launcher\n")
+            self.assertEqual(entry.stat().st_mode & 0o777, 0o750)
+            self.assertTrue((source / "scripts/argv.json").is_file())
+
     def test_update_is_a_no_op_when_the_active_build_is_the_current_release(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)

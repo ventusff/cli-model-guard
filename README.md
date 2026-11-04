@@ -109,7 +109,7 @@ python3 codex/model-guard/scripts/install.py --language en
 model-guard-codex doctor
 ```
 
-The prebuilt runtime supports **Linux x86_64, glibc 2.36+, Python 3.12+ and the official standalone Codex 0.162.1**. The installer verifies a release checksum, prepares a versioned package and atomically switches the existing `~/.local/bin/codex` symlink. Your next `codex` or `cx resume` invocation picks it up in the current shell.
+The prebuilt runtime supports **Linux x86_64, glibc 2.36+, Python 3.12+ and the official standalone Codex 0.162.1**. The installer verifies a release checksum, prepares a versioned package and atomically switches the existing `~/.local/bin/codex` symlink. If that path is instead a launcher of your own (a script that wraps Codex, for example in a resource-limited scope), the installer keeps it: the launcher execs the `native_binary` that `~/.local/share/model-guard-codex/install.json` names, the installer checks that `codex --version` then reports the Model Guard build, and an update puts the launcher back after OpenAI's installer replaced it. Your next `codex` or `cx resume` invocation picks it up in the current shell.
 
 A running Codex process keeps the executable it started with, so an open session never gains Model Guard by installation alone; that is how every native program behaves, and no installer can change it. Instead of leaving you to wonder, the installer and `doctor` list the sessions still on another executable, with their directories: finish or `/quit` each one, then `codex resume` there. Earlier versioned packages no session uses any more are removed.
 

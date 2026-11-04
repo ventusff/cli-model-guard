@@ -90,6 +90,42 @@ class InstallTests(unittest.TestCase):
             self.assertEqual(os.readlink(entry), str(official))
             self.assertEqual(actual_check_output([str(entry), "resume", "--last"], text=True), "stock:resume\nstock:--last\n")
 
+    def test_a_launcher_at_the_entry_is_kept_and_runs_the_native_build_until_removal(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            root, source, codex_home = home / "guard", home / "source", home / "codex"
+            root.mkdir()
+            (source / "native").mkdir(parents=True)
+            official = codex_home / "packages/standalone/current/bin/codex"
+            official.parent.mkdir(parents=True)
+            official.write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo "codex-cli 0.153.4"; else printf "stock:%s\\n" "$@"; fi\n')
+            official.chmod(0o755)
+            native = home / "package/bin/codex"
+            native.parent.mkdir(parents=True)
+            native.write_text(f'#!/bin/sh\nif [ "$1" = --version ]; then echo "codex-cli 0.153.4+model-guard.{__version__}"; else printf "native:%s\\n" "$@"; fi\n')
+            native.chmod(0o755)
+            archive = home / "native.tar.gz"
+            with tarfile.open(archive, "w:gz") as bundle:
+                bundle.add(native, arcname="bin/codex")
+            (source / "native/release.json").write_text(json.dumps({"sha256": hashlib.sha256(archive.read_bytes()).hexdigest(), "codex_version": "0.153.4", "upstream_commit": "fixture"}))
+            entry = home / "bin/codex"
+            entry.parent.mkdir()
+            launcher = ("#!/bin/sh\n"
+                        f"binary=$(sed -n 's/^ *\"native_binary\": *\"\\([^\"]*\\)\".*/\\1/p' {root}/install.json 2>/dev/null)\n"
+                        f'[ -x "$binary" ] || binary={official}\n'
+                        'exec "$binary" "$@"\n')
+            entry.write_text(launcher)
+            entry.chmod(0o755)
+            real_run = subprocess.run
+            environment = {"MODEL_GUARD_CODEX_HOME": str(root), "CODEX_HOME": str(codex_home)}
+            with patch.dict(os.environ, environment), patch("model_guard.install.venv.create"), patch("model_guard.sessions.running", return_value=[]), patch("model_guard.sessions.executables", return_value=[]), patch("model_guard.daemon.adopt", return_value=None), patch("model_guard.daemon.selected_version", return_value=None), patch("model_guard.install.subprocess.run", side_effect=lambda args, **kw: None if "pip" in args else real_run(args, **kw)):
+                install(source, None, archive, entry)
+                self.assertEqual(entry.read_text(), launcher)
+                self.assertEqual(subprocess.check_output([str(entry), "resume"], text=True), "native:resume\n")
+                remove()
+            self.assertEqual(entry.read_text(), launcher)
+            self.assertEqual(subprocess.check_output([str(entry), "resume"], text=True), "stock:resume\n")
+
     def test_incomplete_legacy_markers_are_not_silently_removed(self):
         with self.assertRaises(RuntimeError):
             replace_block("# >>> model-guard-codex >>>\n", "")

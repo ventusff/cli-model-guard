@@ -15,9 +15,10 @@ EFFORTS = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 
 def installed_state():
     path = data_home() / "install.json"
-    if not path.is_file():
+    state = json.loads(path.read_text()) if path.is_file() else {}
+    if not state.get("native_binary"):
         raise RuntimeError("Model Guard is not installed; run scripts/install.py from the plugin checkout")
-    return json.loads(path.read_text())
+    return state
 
 
 def command_probe(args):
@@ -38,19 +39,21 @@ def command_update(args):
 
 
 def command_doctor(args):
-    from .install import sha256
+    from .install import entry_runs, sha256
     from .update import official_version
 
     state = installed_state()
     binary = Path(state["native_binary"])
     entry = Path(state["entry"])
     intact = binary.is_file() and sha256(binary) == state["binary_sha256"]
-    active = entry.is_symlink() and entry.resolve() == binary
+    active = entry_runs(entry, binary, state.get("codex_version", "") + "+model-guard." + state.get("version", ""))
     official = official_version()
     print(f"Model Guard {__version__} · native Codex {state.get('codex_version', 'build')}\nEntry: {entry}\nRuntime intact: {intact}\nEntry active: {active}")
     if official:
         print(f"Official standalone Codex: {official}")
-    if not active:
+    if not active and not entry.is_symlink():
+        print(f"The entry is a launcher that runs another executable; it must exec the native_binary named in {data_home() / 'install.json'}.")
+    elif not active:
         print("The entry runs another executable, usually because an official installer or `codex update` replaced it; `model-guard-codex update` puts Model Guard back on the plugin's current Codex version.")
     elif official and state.get("codex_version") and official != state["codex_version"]:
         print("The official package and this build differ; `model-guard-codex update` moves both to the plugin's current Codex version.")
