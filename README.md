@@ -149,7 +149,7 @@ Removal preserves running sessions, packages and preferences. Legacy managed she
 
 ## Where the usage numbers come from
 
-The 5-hour and 7-day numbers are your **account's**, asked from Claude Code's own usage endpoint (the one behind `/usage`) with the login token Claude Code stored — environment variable, macOS keychain or `~/.claude/.credentials.json`, in that order. One reading is shared by every session on the machine for 30 s.
+The 5-hour and 7-day numbers are your **account's**, asked from Claude Code's own usage endpoint (the one behind `/usage`) with the login token Claude Code stored — environment variable, macOS keychain or `~/.claude/.credentials.json`, in that order. One reading is shared by every session on the machine for 30 s. The reading, with the endpoint's whole answer under `body`, is cached in `usage.json` in the state directory (`$XDG_RUNTIME_DIR/model-guard/`), keyed by a truncated hash of the token, so other tools on the machine can read it instead of asking again.
 
 They are deliberately not the `rate_limits` Claude Code hands to statuslines. That value is what one session last read from a response header: it stands still until that session gets another response, and it survives `/login`. After an account switch it keeps reporting the previous account — and keeps climbing while requests already in flight finish on the old token. Here a new login is a new cache key, so the next refresh asks again immediately; until the answer is in, the segment stays empty rather than showing another account's number. Sessions without a login token (API key, Bedrock, Vertex) fall back to the payload value.
 

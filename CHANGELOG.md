@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.14.1 — 2026-11-14
+
+- Claude Code: the usage cache (`usage.json` in the state directory) keeps the endpoint's whole answer as `body`, next to the two percentages the band shows, so another tool on the machine reads every window the account has — the per-model weekly windows and extra usage included — from the request the statusline already makes instead of asking the endpoint again.
+- Claude Code: a successful answer for a plan without a 5-hour window is cached as a reading (the 5-hour percentage is null) rather than as a bare status.
+
 ## 1.14.0 — 2026-10-14
 
 - **Codex: a session never attaches to a background server that hosts threads without the guard.** Codex can host threads in a shared background server (`codex app-server daemon`), and the guard decides inside whichever process hosts a thread. A new session asks the local server which Model Guard release it runs; a server of another release, or official Codex, is declined: the session hosts its threads itself under the guard and says so in one line naming `codex app-server daemon update --from-cli`, the command that switches the server. A thread read from a server without this build's guard shows a red error.

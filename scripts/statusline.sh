@@ -126,17 +126,19 @@ oauth_token() {
   return 0
 }
 
-# Writes the cache for one login: both utilisations on HTTP 200, only the status
-# otherwise (a failure is not asked again before the TTL runs out either).
+# Writes the cache for one login. HTTP 200 with a JSON object: the two utilisations (null
+# for a window the plan does not have) and the whole answer as `body`, every window the
+# endpoint reports, for other tools on the machine. Anything else: only the status (a
+# failure is not asked again before the TTL runs out either).
 usage_fetch() {  # <token> <key> <now>
   local body="$USAGE_CACHE.$$.body" tmp="$USAGE_CACHE.$$" code
   code=$(printf 'header = "Authorization: Bearer %s"\n' "$1" | curl -sS -K - --max-time "$USAGE_WAIT" \
            -A "model-guard/$MG_VERSION" -o "$body" -w '%{http_code}' "$USAGE_URL" 2>/dev/null) || code=000
-  if [ "$code" = 200 ] && jq -e '.five_hour.utilization != null' "$body" >/dev/null 2>&1; then
+  if [ "$code" = 200 ] && jq -e 'type == "object"' "$body" >/dev/null 2>&1; then
     jq -c --arg key "$2" --argjson at "$3" \
-      '{key: $key, at: $at, http: 200, five_hour: (.five_hour.utilization | floor),
-        seven_day: (.seven_day.utilization | if . == null then null else floor end),
-        resets_at: .five_hour.resets_at}' "$body" > "$tmp" 2>/dev/null
+      'def pct: if type == "number" then floor else null end;
+       {key: $key, at: $at, http: 200, five_hour: (.five_hour.utilization | pct),
+        seven_day: (.seven_day.utilization | pct), resets_at: .five_hour.resets_at, body: .}' "$body" > "$tmp" 2>/dev/null
   else
     jq -nc --arg key "$2" --argjson at "$3" --arg http "$code" \
       '{key: $key, at: $at, http: (($http | tonumber?) // 0)}' > "$tmp" 2>/dev/null

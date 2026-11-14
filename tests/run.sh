@@ -285,6 +285,7 @@ out=$(band)
 check "the reading is the account's, not the payload's" 'grep -q "⏳ 5h 37% · 7d 18%" <<<"$out" && ! grep -q "99" <<<"$out"'
 check "the token travels in a curl config on stdin, not on the command line" 'grep -q "Bearer token-A" "$FAKE_USAGE_CONFIG"'
 check "asked once" '[ "$(calls)" = 1 ]'
+check "the cache keeps the whole answer for other tools" 'jq -e ".body.seven_day.utilization == 18.0 and .body.five_hour.resets_at != null" "$cache" >/dev/null'
 out=$(band)
 check "a refresh inside the TTL reuses the reading" '[ "$(calls)" = 1 ] && grep -q "5h 37%" <<<"$out"'
 creds token-B; FAKE_USAGE_BODY=$(body 5.0 58.0)
@@ -310,6 +311,11 @@ printf 'LANGUAGE=en\nSHOW_ACCOUNT=false\nSHOW_LIMIT=false\n' > "$MODEL_GUARD_CON
 creds token-F; FAKE_USAGE_BODY=$(body 37.0 18.0)
 out=$(band)
 check "SHOW_LIMIT=false hides the plain reading" '! grep -q "⏳" <<<"$out"'
+printf 'LANGUAGE=en\nSHOW_ACCOUNT=false\n' > "$MODEL_GUARD_CONF"
+creds token-G; FAKE_USAGE_BODY='{"five_hour":null,"seven_day":{"utilization":42.0,"resets_at":"2026-09-13T20:00:00+00:00"},"seven_day_fable":{"utilization":7.0}}'
+out=$(band)
+check "a plan without a 5h window: answer kept, no payload number" 'jq -e ".http == 200 and .five_hour == null and .seven_day == 42 and .body.seven_day_fable.utilization == 7.0" "$cache" >/dev/null && ! grep -q "99" <<<"$out"'
+printf 'LANGUAGE=en\nSHOW_ACCOUNT=false\nSHOW_LIMIT=false\n' > "$MODEL_GUARD_CONF"
 rm -f "$MODEL_GUARD_CREDENTIALS"; n=$(calls)
 out=$(band)
 check "no login token: the payload's own reading, nothing asked" '[ "$(calls)" = "$n" ] && grep -q "5h limit 99%!" <<<"$out"'
